@@ -8,11 +8,12 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.devfahim00.openridmik"
+        // own applicationId so Ridmik Pro installs side by side with the original OpenRidmik
+        applicationId = "com.ridmik.pro"
         minSdk = 26
         targetSdk = 34
         versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
-        versionName = (project.findProperty("appVersion") as String?) ?: "0.0.1"
+        versionName = (project.findProperty("appVersion") as String?) ?: "1.1.0"
     }
 
     // Release signing comes from the environment (set by the release workflow from repo secrets).

@@ -1,159 +1,59 @@
 <div align="center">
 
-# ⌨️ OpenRidmik
+# ⌨️ Ridmik Pro
 
-**A fast, modern and open-source Bangla keyboard for Android**
+**Private build of OpenRidmik with Gemini-powered voice typing (Bangla + English)**
 
-Avro phonetic · Probhat · Emoji · Clipboard manager · Number pad · Themes
-
-<br>
-
-[![Release](https://img.shields.io/github/v/release/devfahim00/OpenRidmik?style=for-the-badge&logo=github&color=1A73E8)](https://github.com/devfahim00/OpenRidmik/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/devfahim00/OpenRidmik/total?style=for-the-badge&logo=android&color=3DDC84)](https://github.com/devfahim00/OpenRidmik/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/devfahim00/OpenRidmik/build.yml?style=for-the-badge&logo=githubactions&logoColor=white&label=build)](https://github.com/devfahim00/OpenRidmik/actions)
-[![License: MIT](https://img.shields.io/badge/license-MIT-F5C518?style=for-the-badge)](LICENSE)
-
-![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?style=flat-square&logo=android&logoColor=white)
-![Kotlin](https://img.shields.io/badge/Kotlin-100%25-7F52FF?style=flat-square&logo=kotlin&logoColor=white)
-![No ads](https://img.shields.io/badge/ads-none-success?style=flat-square)
-![No tracking](https://img.shields.io/badge/tracking-none-success?style=flat-square)
-[![Stars](https://img.shields.io/github/stars/devfahim00/OpenRidmik?style=flat-square&logo=github)](https://github.com/devfahim00/OpenRidmik/stargazers)
-[![Last commit](https://img.shields.io/github/last-commit/devfahim00/OpenRidmik?style=flat-square)](https://github.com/devfahim00/OpenRidmik/commits)
-
-<br>
-
-[**⬇️ Download latest APK**](https://github.com/devfahim00/OpenRidmik/releases/latest) &nbsp;•&nbsp;
-[**💬 Telegram channel**](https://t.me/projectredfox) &nbsp;•&nbsp;
-[**🐞 Report a bug**](https://github.com/devfahim00/OpenRidmik/issues)
+Avro phonetic · Probhat · Jatiyo · Emoji · Clipboard manager · Number pad · Themes · **🎤 Voice typing**
 
 </div>
 
 ---
 
-## ✨ Highlights
+## What is different from OpenRidmik?
 
-| | |
-|---|---|
-| 🇧🇩 **Two Bangla layouts** | Avro phonetic (`ami` → আমি) and the fixed Probhat (প্রভাত) layout |
-| 🧠 **Smart suggestions** | Word completions from the first letter and next-word prediction in English, Avro and Probhat, backed by 75,000 bundled words and common phrases. It also learns your own words and word pairs on-device |
-| 🎨 **Matching navigation bar** | The system bar below the keyboard takes the keyboard theme colour |
-| 😀 **Full emoji panel** | Every emoji your device can draw, categorised, with recents and skin tones |
-| 📋 **Clipboard manager** | History, pinning, one-tap paste; sensitive clips are skipped |
-| 🔢 **Number pad** | Dedicated numpad with a Bangla digit row, one tap from the toolbar |
-| 🎨 **Themes** | System, Light, Dark, AMOLED, Ocean, Forest, Rose, Lavender, Sunset or your own colours |
-| 🔄 **Built-in updates** | Silent update check; a dot appears on the toolbar gear when a new release is out |
-| 🔒 **Private by design** | No ads, no analytics, no accounts. Typing data never leaves your phone |
+This repository is a private fork of [devfahim00/OpenRidmik](https://github.com/devfahim00/OpenRidmik) with two changes:
+
+### 1. 🎤 Voice typing with the Gemini API (free tier)
+
+- A **mic button at the top-right corner** of the keyboard (next to the toolbar strip).
+- Tap the mic → speak in **Bangla, English or a mix of both** → the recognised text lands at the cursor with natural punctuation.
+- The audio is recorded on-device (16 kHz WAV) and sent **directly to Google's Gemini API with your own key** — no other server in between, nothing stored.
+- Recording stops by itself after a pause (1.8 s of quiet) or a 25 s cap, or tap the mic again to stop early. Tap while "Recognising…" shows to cancel.
+- **Setup (once)**: open *Ridmik Pro → Settings → Voice typing*, paste a free API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), optionally run *Test key & connection*. On the first mic tap Android asks for the microphone permission.
+- Model picker cycles `gemini-2.5-flash` → `gemini-2.5-flash-lite` → `gemini-2.0-flash`; if a model is ever unavailable the app automatically retries with the next one. Errors (bad key, quota, offline) surface as clear toasts — typing itself never breaks.
+
+### 2. Small cleanups
+
+- The "update available" checker that pointed at the original public repo was removed (this repo is private; updates come from its own releases).
+- `applicationId` is **`com.ridmik.pro`** and the launcher label is **Ridmik Pro**, so it installs **side by side** with the original OpenRidmik — no need to uninstall anything.
+
+Everything else (Avro/Probhat/Jatiyo layouts, suggestions, emoji, clipboard, themes, numpad) is unchanged from the upstream project.
 
 ## 📲 Install
 
-1. Download the latest **`OpenRidmik-vX.Y.Z.apk`** from the [Releases](https://github.com/devfahim00/OpenRidmik/releases/latest) page and install it.
-2. Open **OpenRidmik** and tap **Enable OpenRidmik**, then switch it on in the system keyboard list.
-3. Tap **Switch keyboard** and choose OpenRidmik.
+1. GitHub Actions builds an APK on every push to `main` and publishes it as the **`debug-latest`** release — download `RidmikPro-debug.apk` from [Releases](../../releases) and install it (allow "install unknown apps" if asked).
+2. Open **Ridmik Pro → Enable Ridmik Pro**, switch it on in the system keyboard list, then tap **Switch keyboard** and pick it.
+3. Paste your Gemini API key in *Settings → Voice typing* and you are done.
 
-> [!NOTE]
-> Releases are signed with the same key, so you can always update in place. Debug builds from CI (`debug-dev`, `debug-latest`) are pre-releases for testing and use a different signature.
+## 🏷️ Signed releases
 
-## 🕹️ Using the keyboard
+Push a tag to build a signed release (uses the repo's keystore secrets):
 
-| Gesture | What it does |
-|---|---|
-| **Hold space, slide left / right** | Switch layout (**English · Avro · Probhat**), one step per swipe. Turn layouts on or off in settings (English and Avro are on by default) |
-| **Hold a letter** | Type its alternate (for example a Bangla letter, or the English digit on the Bangla number row). The popup shows the alternate while you hold |
-| **Hold `X` / `C` / `V`** | Cut / copy / paste (with no selection, cut and copy act on the whole field) |
-| **Hold `,`** | Open the emoji panel |
-| **Toolbar** | Emoji · Clipboard · Number pad · Avro key map · Theme · Settings |
+```bash
+git tag v1.1.0 && git push origin v1.1.0
+```
 
-### Phonetic cheat sheet (Avro)
-
-| Type | Get | Type | Get |
-|------|-----|------|-----|
-| `a` | া / আ | `T` `D` `N` | ট ড ণ |
-| `i` `I` | ি ই / ী ঈ | `S` `Sh` | শ ষ |
-| `u` `U` | ু উ / ূ ঊ | `R` `Rh` | ড় ঢ় |
-| `e` `O` | ে এ / ো ও | `ng` | ং |
-| `oi` `OI` | ৈ ঐ / ৌ ঔ | `:` `^` | ঃ ঁ |
-| `rri` | ঋ ৃ | `` ` `` | break a conjunct |
-| `qq` | ঁ | `aa` | আ / া |
-
-Examples: `ami` → আমি · `bangla` → বাংলা · `kkh` → ক্ষ · `baqqsh` → বাঁশ
-
-From the symbols page, `$` types ৳, and `:` / `^` type ঃ / ঁ right after a Bangla letter. Hold the key for the plain character.
-
-The complete rule table is plain text in [`avro_rules.txt`](app/src/main/assets/avro_rules.txt), so you can tweak it without touching any code.
+The Release workflow outputs `RidmikPro-v1.1.0.apk` as a GitHub release. All signed builds share one key, so they update in place.
 
 ## 🏗️ Build from source
 
 ```bash
-git clone https://github.com/devfahim00/OpenRidmik.git
-cd OpenRidmik
+git clone https://github.com/khad3m/ridmik-pro.git
+cd ridmik-pro
 gradle assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Requirements: JDK 17, Android SDK (API 34), Gradle 8.9.
 
-<details>
-<summary><b>🚀 Releasing a new version (maintainers)</b></summary>
-
-<br>
-
-Signed releases are built by GitHub Actions when a `v*` tag is pushed:
-
-```bash
-git tag v0.0.4
-git push origin v0.0.4
-```
-
-The workflow builds a signed `OpenRidmik-v0.0.4.apk` and publishes it as a GitHub Release. The version name comes from the tag and the version code from the workflow run number.
-
-Required repository secrets:
-
-| Secret | Purpose |
-|---|---|
-| `KEYSTORE_BASE64` | Base64-encoded release keystore |
-| `KEYSTORE_PASSWORD` | Keystore password |
-| `KEY_ALIAS` | Key alias |
-| `KEY_PASSWORD` | Key password |
-
-</details>
-
-<details>
-<summary><b>🗂️ Project layout</b></summary>
-
-<br>
-
-```
-app/src/main/
-├── assets/            avro_rules.txt, words_bn.txt, emoji.txt
-└── java/com/devfahim00/openridmik/
-    ├── OpenRidmikService.kt   input method service
-    ├── KeyboardView.kt        canvas-drawn keyboard
-    ├── Layouts.kt             Avro / Probhat / symbols / numpad
-    ├── AvroEngine.kt          phonetic engine + dictionary suggester
-    ├── UserDict.kt            on-device learning
-    ├── EmojiData.kt           emoji catalogue and recents
-    ├── ClipHistory.kt         clipboard history
-    ├── Updater.kt             GitHub release update check
-    └── SettingsActivity.kt    settings screen
-```
-
-</details>
-
-## 🤝 Contributing
-
-Issues and pull requests are welcome. Good places to start: improving the Avro rules, extending the word list, or adding themes. Please open an issue first for larger changes.
-
-## 💬 Community
-
-Updates, builds and discussion happen on Telegram: **[t.me/projectredfox](https://t.me/projectredfox)**
-
-## 📄 License
-
-Released under the [MIT License](LICENSE) © 2026 devfahim00.
-
-OpenRidmik is an independent, original implementation. It contains no code, dictionaries or assets from any other keyboard app.
-
-<div align="center">
-
-<sub>Made with ❤️ for Bangla typists</sub>
-
-</div>
+Based on [OpenRidmik](https://github.com/devfahim00/OpenRidmik) (MIT license, see [LICENSE](LICENSE)). Voice typing uses the [Google Gemini API](https://ai.google.dev/) free tier.

@@ -1,8 +1,10 @@
 package com.devfahim00.openridmik
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -58,6 +60,32 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     private var clipList: LinearLayout? = null
     private var gearBtn: IconView? = null
 
+    // voice typing (mic button, top-right corner)
+    private var micBtn: IconView? = null
+    private var voiceBar: LinearLayout? = null
+    private var voiceStatus: TextView? = null
+    private var voiceDot: IconView? = null
+    private var voiceClose: IconView? = null
+    private val voiceRed = Color.rgb(0xE5, 0x39, 0x35)
+    private var voiceStart = 0L
+
+    private val blinkRun = object : Runnable {
+        override fun run() {
+            if (voiceState != VoiceState.REC) return
+            val v = voiceDot ?: return
+            v.alpha = if (v.alpha > 0.4f) 0.35f else 1f
+            voiceStatus?.text = "Listening… speak now · ${(System.currentTimeMillis() - voiceStart) / 1000}s"
+            ui.postDelayed(this, 500)
+        }
+    }
+
+    private enum class VoiceState { IDLE, REC, BUSY }
+
+    private var voiceState = VoiceState.IDLE
+    private var voiceGen = 0
+    private var voicePending = false
+    private var recorder: VoiceRecorder? = null
+
     private var bangla = true
     private var probhat = false
     private var jatiyo = false
@@ -81,8 +109,15 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         }
     }
 
+    companion object {
+        /** Lets MicPermissionActivity hand control back to the running keyboard. */
+        @JvmStatic
+        var live: OpenRidmikService? = null
+    }
+
     override fun onCreate() {
         super.onCreate()
+        live = this
         CrashLog.install(applicationContext)
         audio = getSystemService(AUDIO_SERVICE) as AudioManager
         clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
@@ -98,6 +133,8 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onDestroy() {
+        cancelVoice()
+        if (live === this) live = null
         clipboard?.removePrimaryClipChangedListener(clipListener)
         super.onDestroy()
     }
@@ -142,7 +179,6 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         tool(Ico.KEYMAP) { showKeyMap() }
         tool(Ico.PALETTE) { cycleTheme() }
         gearBtn = tool(Ico.GEAR) { openSettings() }
-        refreshUpdateBadge()
 
         suggestionBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -175,6 +211,15 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         strip.addView(toggleBtn, lp(dp(40), LinearLayout.LayoutParams.MATCH_PARENT))
         strip.addView(toolbar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         strip.addView(suggestionBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        // voice status row (visible only while the mic is recording / recognising)
+        voiceBar = buildVoiceBar()
+        strip.addView(voiceBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        // mic sits at the very right end of the strip: the top-right corner of the keyboard
+        micBtn = IconView(this, Ico.MIC).apply {
+            color = theme.text
+            setOnClickListener { onMicTap() }
+        }
+        strip.addView(micBtn, lp(dp(40), LinearLayout.LayoutParams.MATCH_PARENT))
         kbView = KeyboardView(this).also { it.listener = this }
         root.addView(strip, lp(LinearLayout.LayoutParams.MATCH_PARENT, dp(40)))
         root.addView(kbView, lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
@@ -184,8 +229,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        refreshUpdateBadge()
-        Updater.check(this, force = false) { refreshUpdateBadge() }
+        cancelVoice()
         raw.clear()
         clearBar()
         toolbarOpen = false
@@ -236,6 +280,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        cancelVoice()
         currentInputConnection?.let { finishComposing(it) }
         UserDict.save(this)
         super.onFinishInputView(finishingInput)
@@ -262,6 +307,8 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         for (tv in suggestionViews) tv.setTextColor(theme.text)
         for (b in toolbarButtons) tint(b)
         toggleBtn.setTextColor(theme.hint)
+        voiceStatus?.setTextColor(theme.text)
+        voiceClose?.color = theme.hint
         kbView.refreshTheme()
         syncNavBar()
     }
@@ -305,10 +352,6 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         Toast.makeText(this, Themes.label(next), Toast.LENGTH_SHORT).show()
     }
 
-    private fun refreshUpdateBadge() {
-        gearBtn?.badge = Updater.available(this) != null
-    }
-
     private fun openSettings() {
         val i = Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(i)
@@ -345,10 +388,26 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         updateBarVisibility()
     }
 
-    /** The strip above the keys shows the toolbar normally and word suggestions while composing (Avro). */
+    /**
+     * The strip above the keys shows the toolbar normally and word suggestions while composing (Avro).
+     * While the mic is active the whole strip becomes the voice status row.
+     */
     private fun updateBarVisibility() {
         if (!::toolbar.isInitialized || !::toggleBtn.isInitialized) return
         val noPanel = panel == null
+        if (noPanel && voiceState != VoiceState.IDLE) {
+            toggleBtn.visibility = View.GONE
+            toolbar.visibility = View.GONE
+            suggestionBar.visibility = View.GONE
+            voiceBar?.visibility = View.VISIBLE
+            micBtn?.visibility = View.VISIBLE
+            micBtn?.color = voiceRed
+            return
+        }
+        voiceBar?.visibility = View.GONE
+        micBtn?.color = theme.text
+        micBtn?.visibility =
+            if (noPanel && Prefs.get(this, "voice") && !passwordField) View.VISIBLE else View.GONE
         // the toolbar is the default; suggestions only replace it once there is something to suggest
         val can = barHasItems && mode == Mode.ALPHA && !passwordField && !forceLatin && Prefs.get(this, "suggestions")
         val showSug = can && !toolbarOpen
@@ -843,9 +902,168 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
 
     private fun clearBar() = setBar(null, null, null)
 
+    // ---- voice typing (Gemini, Bangla + English) ----
+
+    /** Builds the strip row shown while the mic is recording or the audio is being recognised. */
+    private fun buildVoiceBar(): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        voiceDot = IconView(this, Ico.MIC).apply {
+            color = voiceRed
+            scale = 0.6f
+        }
+        bar.addView(voiceDot, lp(dp(36), LinearLayout.LayoutParams.MATCH_PARENT))
+        voiceStatus = TextView(this).apply {
+            textSize = 14f
+            maxLines = 1
+            setTextColor(theme.text)
+            setPadding(dp(10), 0, 0, 0)
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        bar.addView(voiceStatus, lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        voiceClose = IconView(this, Ico.CLOSE).apply {
+            color = theme.hint
+            scale = 0.5f
+            setOnClickListener { cancelVoice() }
+        }
+        bar.addView(voiceClose, lp(dp(38), LinearLayout.LayoutParams.MATCH_PARENT))
+        return bar
+    }
+
+    private fun onMicTap() {
+        try {
+            when (voiceState) {
+                // second tap on the mic stops the recording early
+                VoiceState.REC -> recorder?.stop()
+                VoiceState.BUSY -> cancelVoice()
+                VoiceState.IDLE -> startVoice()
+            }
+        } catch (e: Exception) {
+            CrashLog.record(this, "mic", e)
+            resetVoice()
+        }
+    }
+
+    /** Called by MicPermissionActivity once the system permission dialog has been answered. */
+    fun onMicPermissionGranted() {
+        if (voicePending && voiceState == VoiceState.IDLE && isInputViewShown) {
+            startVoice()
+        } else {
+            voicePending = false
+        }
+    }
+
+    private fun startVoice() {
+        voicePending = false
+        val key = Prefs.getString(this, "gemini_key").trim()
+        if (key.isEmpty()) {
+            toast("Add your free Gemini API key in Ridmik Pro settings first")
+            openSettings()
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            voicePending = true
+            try {
+                startActivity(
+                    Intent(this, MicPermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            } catch (e: Exception) {
+                voicePending = false
+                toast("Allow the microphone permission to use voice typing")
+            }
+            return
+        }
+        if (panel != null) hidePanel()
+        currentInputConnection?.let { finishComposing(it) }
+        voiceGen++
+        val gen = voiceGen
+        voiceStart = System.currentTimeMillis()
+        setVoiceState(VoiceState.REC)
+        val rec = VoiceRecorder { wav, reason -> ui.post { if (gen == voiceGen) onRecordDone(gen, wav, reason) } }
+        recorder = rec
+        rec.start()
+    }
+
+    private fun onRecordDone(gen: Int, wav: ByteArray?, reason: String?) {
+        if (voiceState != VoiceState.REC || gen != voiceGen) return
+        if (reason != null || wav == null) {
+            resetVoice()
+            toast(reason ?: "No speech captured")
+            return
+        }
+        setVoiceState(VoiceState.BUSY)
+        val key = Prefs.getString(this, "gemini_key").trim()
+        val model = Prefs.getString(this, "gemini_model", GeminiVoice.DEFAULT_MODEL).trim()
+            .ifEmpty { GeminiVoice.DEFAULT_MODEL }
+        Thread {
+            val res = try {
+                GeminiVoice.transcribe(key, model, wav)
+            } catch (e: Exception) {
+                VoiceResult.Error("Voice failed: ${e.message ?: "unknown"}")
+            }
+            ui.post { if (gen == voiceGen) onTranscribed(gen, res) }
+        }.start()
+    }
+
+    private fun onTranscribed(gen: Int, res: VoiceResult) {
+        if (gen != voiceGen) return
+        resetVoice()
+        when (res) {
+            is VoiceResult.Text -> {
+                val t = res.text.trim()
+                if (t.isEmpty()) {
+                    toast("No speech detected")
+                    return
+                }
+                commitVoice(t)
+            }
+            is VoiceResult.Error -> toast(res.message)
+        }
+    }
+
+    /** Commits the recognised text at the cursor, adding one space when the field already has text. */
+    private fun commitVoice(t: String) {
+        val ic = currentInputConnection ?: return
+        val before = ic.getTextBeforeCursor(1, 0)?.toString() ?: ""
+        val join = if (before.isEmpty() || before[0].isWhitespace() || before[0] == '।') "" else " "
+        ic.commitText(join + t, 1)
+        typedSinceStart = true
+        refreshBar(ic)
+    }
+
+    private fun cancelVoice() {
+        voiceGen++
+        voicePending = false
+        recorder?.cancel()
+        recorder = null
+        setVoiceState(VoiceState.IDLE)
+    }
+
+    private fun resetVoice() {
+        recorder = null
+        setVoiceState(VoiceState.IDLE)
+    }
+
+    private fun setVoiceState(s: VoiceState) {
+        voiceState = s
+        ui.removeCallbacks(blinkRun)
+        if (s == VoiceState.REC) {
+            voiceDot?.alpha = 1f
+            voiceStatus?.text = "Listening… speak now"
+            ui.postDelayed(blinkRun, 500)
+        } else if (s == VoiceState.BUSY) {
+            voiceStatus?.text = "Recognising…"
+        }
+        updateBarVisibility()
+    }
+
     // ---- panels (emoji / clipboard) ----
 
     private fun openPanel(v: View) {
+        cancelVoice()
         val h = maxOf(kbView.height + dp(38), dp(270))
         panel = v
         root.removeView(kbView)

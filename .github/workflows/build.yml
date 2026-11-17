@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenRidmik-debug
+          name: RidmikPro-debug
           path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: Publish debug APK as a release
@@ -36,10 +36,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ "${GITHUB_REF_NAME}" = "main" ]; then TAG=debug-latest; else TAG=debug-${GITHUB_REF_NAME}; fi
-          cp app/build/outputs/apk/debug/app-debug.apk OpenRidmik-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk RidmikPro-debug.apk
           gh release delete "$TAG" --cleanup-tag --yes || true
-          gh release create "$TAG" OpenRidmik-debug.apk \
+          gh release create "$TAG" RidmikPro-debug.apk \
             --target "${GITHUB_SHA}" \
             --prerelease \
-            --title "OpenRidmik debug build (${GITHUB_REF_NAME})" \
-            --notes "Automated debug build from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}"
+            --title "Ridmik Pro debug build (${GITHUB_REF_NAME})" \
+            --notes "Automated debug build from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}. Install it directly (unknown sources allowed); it installs beside the original OpenRidmik."

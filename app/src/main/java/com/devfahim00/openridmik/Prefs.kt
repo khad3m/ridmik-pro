@@ -10,6 +10,7 @@ object Prefs {
         "suggestions" to true,
         "banglaDigits" to true,
         "clipboard" to true,
+        "voice" to true,
         "lang_en" to true,
         "lang_avro" to true,
         "lang_probhat" to false,

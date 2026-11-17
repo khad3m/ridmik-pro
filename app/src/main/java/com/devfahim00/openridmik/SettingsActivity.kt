@@ -74,6 +74,7 @@ class SettingsActivity : Activity() {
     private lateinit var swatchRow: LinearLayout
     private val heightBars = ArrayList<SeekBar>()
     private var batteryStatus: TextView? = null
+    private lateinit var apiKeyEdit: EditText
 
     private fun isUnrestricted(): Boolean =
         (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
@@ -82,11 +83,23 @@ class SettingsActivity : Activity() {
         super.onResume()
         batteryStatus?.text = if (isUnrestricted()) "Unrestricted ✓" else "Restricted"
     }
+
+    override fun onPause() {
+        super.onPause()
+        // keep the Gemini key even when the user leaves before tapping another field
+        if (::apiKeyEdit.isInitialized) Prefs.setString(this, "gemini_key", apiKeyEdit.text.toString().trim())
+    }
     private val d by lazy { resources.displayMetrics.density }
 
     private fun dp(v: Int) = (v * d).toInt()
 
     private fun hex(c: Int) = String.format("#%06X", c and 0xFFFFFF)
+
+    private fun currentVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "0"
+    } catch (e: Exception) {
+        "0"
+    }
 
     private fun parseColor(s: String): Int? {
         val t = s.trim()
@@ -202,39 +215,11 @@ class SettingsActivity : Activity() {
                 setPadding(dp(8), 0, dp(8), 0)
                 addView(text("OpenRidmik", 30f, fg, bold = true))
                 addView(
-                    text("v${Updater.currentVersion(this@SettingsActivity)}", 13f, muted).apply { setPadding(dp(10), 0, 0, dp(5)) },
+                    text("v${currentVersion()}", 13f, muted).apply { setPadding(dp(10), 0, 0, dp(5)) },
                 )
             },
             lp(),
         )
-
-        // ---- update banner (only when a newer release exists) ----
-        val banner = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = rounded(accent, 16)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            visibility = View.GONE
-        }
-        val bannerTitle = text("", 16f, onAccent, bold = true)
-        banner.addView(bannerTitle)
-        banner.addView(text("Tap to download", 13f, onAccent).apply { alpha = 0.85f })
-        root.addView(banner, lp(16))
-
-        fun showUpdate(info: Updater.Info?) {
-            if (info == null) {
-                banner.visibility = View.GONE
-                return
-            }
-            bannerTitle.text = "Update available · v${info.version}"
-            banner.visibility = View.VISIBLE
-            banner.setOnClickListener {
-                val url = info.apkUrl.ifEmpty { info.pageUrl }
-                if (url.isNotEmpty()) startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-            }
-        }
-        showUpdate(Updater.available(this))
-        // silent check whenever the app opens
-        Updater.check(this, force = true) { r -> if (r is Updater.Result.Available) showUpdate(r.info) }
 
         // ---- keyboard ----
         section("Keyboard")
@@ -467,23 +452,65 @@ class SettingsActivity : Activity() {
             lp(6),
         )
 
-        // ---- about ----
-        section("About")
-        val about = card()
-        val status = text("", 14f, muted)
-        row(about, true, "Check for updates", status) {
-            status.text = "Checking…"
-            Updater.check(this, force = true) { r ->
-                when (r) {
-                    is Updater.Result.Available -> {
-                        status.text = "v${r.info.version}"
-                        showUpdate(r.info)
+        // ---- voice typing ----
+        section("Voice typing · বাংলা + English")
+        val vcard = card()
+        apiKeyEdit = EditText(this).apply {
+            setText(Prefs.getString(this@SettingsActivity, "gemini_key"))
+            hint = "paste your Gemini API key here"
+            setTextColor(fg)
+            setHintTextColor(muted)
+            textSize = 14f
+            gravity = Gravity.END
+            background = null
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            maxLines = 1
+            minWidth = dp(120)
+        }
+        row(vcard, true, "Gemini API key", apiKeyEdit)
+        val modelLabel = text(
+            Prefs.getString(this, "gemini_model", GeminiVoice.DEFAULT_MODEL).ifEmpty { GeminiVoice.DEFAULT_MODEL },
+            14f, muted,
+        )
+        row(vcard, false, "Model", modelLabel) {
+            val cur = Prefs.getString(this@SettingsActivity, "gemini_model", GeminiVoice.DEFAULT_MODEL)
+            val i = GeminiVoice.MODELS.indexOf(cur).let { if (it < 0) 0 else it }
+            val next = GeminiVoice.MODELS[(i + 1) % GeminiVoice.MODELS.size]
+            Prefs.setString(this@SettingsActivity, "gemini_model", next)
+            modelLabel.text = next
+        }
+        val testStatus = text("", 14f, muted)
+        row(vcard, false, "Test key & connection", testStatus) {
+            val key = apiKeyEdit.text.toString().trim()
+            Prefs.setString(this@SettingsActivity, "gemini_key", key)
+            if (key.isEmpty()) {
+                Toast.makeText(this@SettingsActivity, "Enter the API key first", Toast.LENGTH_SHORT).show()
+            } else {
+                testStatus.text = "Testing…"
+                Thread {
+                    val err = GeminiVoice.ping(
+                        key,
+                        Prefs.getString(this@SettingsActivity, "gemini_model", GeminiVoice.DEFAULT_MODEL),
+                    )
+                    runOnUiThread {
+                        testStatus.text = if (err == null) "Working ✓" else "Failed: $err"
                     }
-                    is Updater.Result.UpToDate -> status.text = "Up to date"
-                    is Updater.Result.Failed -> status.text = "Failed"
-                }
+                }.start()
             }
         }
+        row(vcard, false, "Get a free API key (aistudio.google.com)", chevron()) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
+        }
+        toggleRow(vcard, false, "Show mic button", "voice")
+        root.addView(
+            text(
+                "Tap the mic at the top-right of the keyboard, speak in Bangla or English, then tap again (or just pause) " +
+                    "to stop - the words land at the cursor. Audio goes to Google's Gemini API with your own free key; " +
+                    "nothing else is sent anywhere. The first time, Android asks for the microphone permission.",
+                12f, muted,
+            ),
+            lp(6),
+        )
 
         // ---- telegram ----
         root.addView(
