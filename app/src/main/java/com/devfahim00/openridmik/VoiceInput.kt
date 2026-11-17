@@ -23,9 +23,6 @@ sealed class VoiceResult {
 }
 
 object GeminiVoice {
-    const val DEFAULT_MODEL = "gemini-2.5-flash"
-    /** Free-tier models that accept audio, tried in this order when the chosen one is unavailable. */
-    val MODELS = listOf("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash")
 
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
 
@@ -38,12 +35,13 @@ object GeminiVoice {
         "If the audio contains no speech, return an empty string."
 
     /**
-     * Transcribes [wav] (WAV bytes) with the user's Gemini key.
-     * The model is retried with the next free-tier model only when the model itself is rejected;
-     * key / network / quota problems are returned as-is.
+     * Transcribes [wav] (WAV bytes) with the user's Gemini key. [fallbacks] are other models the
+     * user fetched from Google earlier; they are tried only when the chosen model itself is
+     * rejected. Key / network / quota problems are returned as-is.
      */
-    fun transcribe(apiKey: String, model: String, wav: ByteArray): VoiceResult {
-        val chain = mutableListOf(model).apply { for (m in MODELS) if (m != model) add(m) }
+    fun transcribe(apiKey: String, model: String, wav: ByteArray, fallbacks: List<String> = emptyList()): VoiceResult {
+        val chain = mutableListOf(model)
+        for (m in fallbacks) if (m != model && m !in chain) chain.add(m)
         var last = "Voice input failed"
         for (m in chain) {
             when (val r = post(apiKey, m, audioBody(wav, m))) {
@@ -52,6 +50,59 @@ object GeminiVoice {
             }
         }
         return VoiceResult.Error(last)
+    }
+
+    /** Model catalogue of the key, fetched live from Google - nothing is hardcoded. */
+    sealed class ModelList {
+        class Ok(val models: List<String>) : ModelList()
+        class Fail(val message: String) : ModelList()
+    }
+
+    /** Speech-generation / non-input models that make no sense as a transcription target. */
+    private val NON_INPUT = listOf("tts", "imagen", "image-gen", "veo", "embed", "aqa", "gemma", "learnlm", "live")
+
+    /** GET /models: only models that accept generateContent, newest catalogue straight from Google. */
+    fun fetchModels(apiKey: String): ModelList {
+        val conn = URL(BASE + "models?pageSize=1000").openConnection() as HttpURLConnection
+        return try {
+            conn.connectTimeout = 12000
+            conn.readTimeout = 20000
+            conn.setRequestProperty("x-goog-api-key", apiKey)
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val msg = try {
+                    conn.errorStream?.bufferedReader()?.use { it.readText() }
+                } catch (e: Exception) {
+                    null
+                }
+                return ModelList.Fail((classify(code, msg ?: "") as VoiceResult.Error).message)
+            }
+            val o = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            val arr = o.optJSONArray("models") ?: return ModelList.Ok(emptyList())
+            val out = ArrayList<String>()
+            for (i in 0 until arr.length()) {
+                val m = arr.getJSONObject(i)
+                val name = m.optString("name").removePrefix("models/")
+                if (name.isEmpty()) continue
+                val methods = m.optJSONArray("supportedGenerationMethods") ?: continue
+                var gen = false
+                for (j in 0 until methods.length()) if (methods.optString(j) == "generateContent") gen = true
+                if (!gen) continue
+                val low = name.lowercase()
+                if (NON_INPUT.any { low.contains(it) }) continue
+                out.add(name)
+            }
+            out.sort()
+            ModelList.Ok(out)
+        } catch (e: UnknownHostException) {
+            ModelList.Fail("No internet connection")
+        } catch (e: SocketTimeoutException) {
+            ModelList.Fail("Network too slow - try again")
+        } catch (e: Exception) {
+            ModelList.Fail("Network error: ${e.message ?: "unknown"}")
+        } finally {
+            try { conn.disconnect() } catch (_: Exception) {}
+        }
     }
 
     /** Text-only sanity check of a key; returns null when the key works, otherwise the reason. */
@@ -146,6 +197,10 @@ object GeminiVoice {
                 VoiceResult.Error("Invalid API key - check it in Ridmik Pro settings")
             code == 401 || code == 403 || m.contains("permission denied") ->
                 VoiceResult.Error("Key rejected (403) - check the key restrictions in Google AI Studio")
+            m.contains("location is not supported") || m.contains("not supported for the api use") ->
+                VoiceResult.Error(
+                    "Google blocks the Gemini API from your region/network. The key is fine - try another network (or VPN), then retry.",
+                )
             code == 429 || m.contains("quota") || m.contains("resource_exhausted") ->
                 VoiceResult.Error("Free quota reached - wait a minute (rate limit) or a day (daily limit)")
             code >= 500 ->

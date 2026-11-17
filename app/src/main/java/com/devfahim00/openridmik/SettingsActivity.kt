@@ -75,6 +75,7 @@ class SettingsActivity : Activity() {
     private val heightBars = ArrayList<SeekBar>()
     private var batteryStatus: TextView? = null
     private lateinit var apiKeyEdit: EditText
+    private lateinit var modelEdit: EditText
 
     private fun isUnrestricted(): Boolean =
         (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
@@ -86,8 +87,9 @@ class SettingsActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
-        // keep the Gemini key even when the user leaves before tapping another field
+        // keep the Gemini key and model even when the user leaves without pressing Save
         if (::apiKeyEdit.isInitialized) Prefs.setString(this, "gemini_key", apiKeyEdit.text.toString().trim())
+        if (::modelEdit.isInitialized) Prefs.setString(this, "gemini_model", modelEdit.text.toString().trim())
     }
     private val d by lazy { resources.displayMetrics.density }
 
@@ -213,7 +215,7 @@ class SettingsActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.BOTTOM
                 setPadding(dp(8), 0, dp(8), 0)
-                addView(text("OpenRidmik", 30f, fg, bold = true))
+                addView(text("Ridmik Pro", 30f, fg, bold = true))
                 addView(
                     text("v${currentVersion()}", 13f, muted).apply { setPadding(dp(10), 0, 0, dp(5)) },
                 )
@@ -446,7 +448,7 @@ class SettingsActivity : Activity() {
         }
         root.addView(
             text(
-                "If the system switches to another keyboard after long use, it is usually because the phone killed the keyboard to save battery or memory. Set OpenRidmik to \"No restrictions\" / allow autostart, and keep it out of the recents-clear list.",
+                "If the system switches to another keyboard after long use, it is usually because the phone killed the keyboard to save battery or memory. Set Ridmik Pro to \"No restrictions\" / allow autostart, and keep it out of the recents-clear list.",
                 12f, muted,
             ),
             lp(6),
@@ -455,50 +457,143 @@ class SettingsActivity : Activity() {
         // ---- voice typing ----
         section("Voice typing · বাংলা + English")
         val vcard = card()
-        apiKeyEdit = EditText(this).apply {
-            setText(Prefs.getString(this@SettingsActivity, "gemini_key"))
-            hint = "paste your Gemini API key here"
+
+        // premium-style inner panel: small uppercase labels over rounded, stroked input boxes
+        fun vlabel(t: String) = text(t.uppercase(), 11f, muted, bold = true).apply {
+            letterSpacing = 0.06f
+            setPadding(dp(2), dp(14), 0, dp(6))
+        }
+
+        fun fieldBox(hint: String, filled: String): EditText = EditText(this).apply {
+            setText(filled)
+            this.hint = hint
             setTextColor(fg)
             setHintTextColor(muted)
             textSize = 14f
-            gravity = Gravity.END
-            background = null
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            maxLines = 1
-            minWidth = dp(120)
-        }
-        row(vcard, true, "Gemini API key", apiKeyEdit)
-        val modelLabel = text(
-            Prefs.getString(this, "gemini_model", GeminiVoice.DEFAULT_MODEL).ifEmpty { GeminiVoice.DEFAULT_MODEL },
-            14f, muted,
-        )
-        row(vcard, false, "Model", modelLabel) {
-            val cur = Prefs.getString(this@SettingsActivity, "gemini_model", GeminiVoice.DEFAULT_MODEL)
-            val i = GeminiVoice.MODELS.indexOf(cur).let { if (it < 0) 0 else it }
-            val next = GeminiVoice.MODELS[(i + 1) % GeminiVoice.MODELS.size]
-            Prefs.setString(this@SettingsActivity, "gemini_model", next)
-            modelLabel.text = next
-        }
-        val testStatus = text("", 14f, muted)
-        row(vcard, false, "Test key & connection", testStatus) {
-            val key = apiKeyEdit.text.toString().trim()
-            Prefs.setString(this@SettingsActivity, "gemini_key", key)
-            if (key.isEmpty()) {
-                Toast.makeText(this@SettingsActivity, "Enter the API key first", Toast.LENGTH_SHORT).show()
-            } else {
-                testStatus.text = "Testing…"
-                Thread {
-                    val err = GeminiVoice.ping(
-                        key,
-                        Prefs.getString(this@SettingsActivity, "gemini_model", GeminiVoice.DEFAULT_MODEL),
-                    )
-                    runOnUiThread {
-                        testStatus.text = if (err == null) "Working ✓" else "Failed: $err"
-                    }
-                }.start()
+            background = GradientDrawable().apply {
+                setColor(bg)
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), line)
             }
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isSingleLine = true
         }
-        row(vcard, false, "Get a free API key (aistudio.google.com)", chevron()) {
+
+        fun pillButton(labelText: String, bgColor: Int, fgColor: Int, bold: Boolean = false) = TextView(this).apply {
+            this.text = labelText
+            textSize = 14f
+            setTextColor(fgColor)
+            if (bold) setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(bgColor)
+                cornerRadius = dp(14).toFloat()
+            }
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+        }
+
+        val vinner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(6), dp(14), dp(14))
+        }
+        vcard.addView(vinner)
+
+        vinner.addView(vlabel("Gemini API key"))
+        apiKeyEdit = fieldBox("paste your free Gemini API key (AIza…)", Prefs.getString(this, "gemini_key"))
+        vinner.addView(apiKeyEdit)
+
+        vinner.addView(vlabel("Model"))
+        modelEdit = fieldBox("fetch the list, or type e.g. gemini-2.5-flash", Prefs.getString(this, "gemini_model"))
+        vinner.addView(modelEdit)
+
+        val fetchBtn = pillButton("⭳  Fetch model list from Google", line, accent)
+        vinner.addView(fetchBtn, lp(10))
+
+        val saveBtn = pillButton("Save & Test", accent, onAccent, bold = true)
+        vinner.addView(saveBtn, lp(10))
+
+        val voiceStatus = text("", 13f, muted).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(2), dp(10), dp(2), 0)
+        }
+        vinner.addView(voiceStatus)
+
+        val errColor = Color.parseColor("#E53935")
+
+        fun saveAndTest() {
+            val key = apiKeyEdit.text.toString().trim()
+            val model = modelEdit.text.toString().trim()
+            if (key.isEmpty()) {
+                Toast.makeText(this@SettingsActivity, "Paste your Gemini API key first", Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (model.isEmpty()) {
+                Toast.makeText(this@SettingsActivity, "Fetch the model list or type a model name", Toast.LENGTH_SHORT).show()
+                return
+            }
+            Prefs.setString(this@SettingsActivity, "gemini_key", key)
+            Prefs.setString(this@SettingsActivity, "gemini_model", model)
+            voiceStatus.text = "Testing $model…"
+            voiceStatus.setTextColor(muted)
+            Thread {
+                val err = GeminiVoice.ping(key, model)
+                runOnUiThread {
+                    if (err == null) {
+                        voiceStatus.text = "Saved ✓  ·  $model is working"
+                        voiceStatus.setTextColor(accent)
+                    } else {
+                        voiceStatus.text = err
+                        voiceStatus.setTextColor(errColor)
+                    }
+                }
+            }.start()
+        }
+
+        fun fetchModels() {
+            val key = apiKeyEdit.text.toString().trim()
+            if (key.isEmpty()) {
+                Toast.makeText(this@SettingsActivity, "Paste your Gemini API key first", Toast.LENGTH_SHORT).show()
+                return
+            }
+            Prefs.setString(this@SettingsActivity, "gemini_key", key)
+            fetchBtn.text = "Fetching models…"
+            fetchBtn.isEnabled = false
+            Thread {
+                val res = GeminiVoice.fetchModels(key)
+                runOnUiThread {
+                    fetchBtn.text = "⭳  Fetch model list from Google"
+                    fetchBtn.isEnabled = true
+                    when (res) {
+                        is GeminiVoice.ModelList.Ok -> {
+                            if (res.models.isEmpty()) {
+                                Toast.makeText(this@SettingsActivity, "No text models found for this key", Toast.LENGTH_LONG).show()
+                            } else {
+                                // remember the catalogue so voice typing can fall back to another model
+                                Prefs.setString(this@SettingsActivity, "models_cache", res.models.joinToString("\n"))
+                                AlertDialog.Builder(this)
+                                    .setTitle("Pick a Gemini model (${res.models.size})")
+                                    .setItems(res.models.toTypedArray()) { _, which ->
+                                        modelEdit.setText(res.models[which])
+                                        saveAndTest()
+                                    }
+                                    .setNeutralButton("Close", null)
+                                    .show()
+                            }
+                        }
+                        is GeminiVoice.ModelList.Fail -> {
+                            voiceStatus.text = res.message
+                            voiceStatus.setTextColor(errColor)
+                        }
+                    }
+                }
+            }.start()
+        }
+
+        fetchBtn.setOnClickListener { fetchModels() }
+        saveBtn.setOnClickListener { saveAndTest() }
+
+        row(vcard, true, "Get a free API key (aistudio.google.com)", chevron()) {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
         }
         toggleRow(vcard, false, "Show mic button", "voice")
@@ -510,18 +605,6 @@ class SettingsActivity : Activity() {
                 12f, muted,
             ),
             lp(6),
-        )
-
-        // ---- telegram ----
-        root.addView(
-            text("Join Telegram channel", 16f, Color.WHITE, bold = true).apply {
-                gravity = Gravity.CENTER
-                background = rounded(Color.parseColor("#229ED9"), 16)
-                setOnClickListener {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/projectredfox")))
-                }
-            },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(24) },
         )
 
         setContentView(

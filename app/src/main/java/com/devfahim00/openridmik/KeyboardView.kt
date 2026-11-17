@@ -1,7 +1,11 @@
 package com.devfahim00.openridmik
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -11,6 +15,7 @@ import android.os.Looper
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.DecelerateInterpolator
 
 object Codes {
     const val SHIFT = -1
@@ -93,6 +98,13 @@ class KeyboardView(context: Context) : View(context) {
 
     private var rects: List<List<RectF>> = emptyList()
     private var rowH = 0f
+
+    // layout-switch cross-fade: a snapshot of the old layout slides a few pixels and fades out over the new one
+    private var fadeBmp: Bitmap? = null
+    private var fadeAlpha = 1f
+    private var fadeShift = 0f
+    private val fadePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private var fadeAnim: ValueAnimator? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val presses = HashMap<Int, Press>()
@@ -224,6 +236,51 @@ class KeyboardView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(cBg)
+        drawKeys(canvas)
+        val bmp = fadeBmp
+        if (bmp != null) {
+            fadePaint.alpha = (fadeAlpha * 255).toInt()
+            canvas.drawBitmap(bmp, fadeShift, 0f, fadePaint)
+        }
+    }
+
+    /** Swaps [rows] with a soft cross-fade ([dir] +1 = old layout slides right, -1 = left) so
+     *  moving between the alphabet and the ?123 pages does not feel like a hard cut. */
+    fun transitionRows(newRows: List<List<Key>>, dir: Int) {
+        fadeAnim?.cancel()
+        if (width > 0 && height > 0 && rows.isNotEmpty() && rects.size == rows.size) {
+            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            c.drawColor(cBg)
+            drawKeys(c)
+            fadeBmp = bmp
+        } else {
+            fadeBmp = null
+        }
+        rows = newRows
+        fadeAlpha = 1f
+        fadeShift = 0f
+        fadeAnim = ValueAnimator.ofFloat(1f, 0f).apply {
+            duration = 180
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { a ->
+                val v = a.animatedValue as Float
+                fadeAlpha = v
+                fadeShift = dir * (1f - v) * width * 0.06f
+                invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    fadeBmp?.recycle()
+                    fadeBmp = null
+                    invalidate()
+                }
+            })
+            start()
+        }
+    }
+
+    private fun drawKeys(canvas: Canvas) {
         if (rects.size != rows.size) return
         val gx = dp(3f)
         val gy = dp(4f)
@@ -473,6 +530,7 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        fadeAnim?.cancel()
         cancelAll()
         super.onDetachedFromWindow()
     }

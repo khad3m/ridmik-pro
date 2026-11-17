@@ -1,4 +1,4 @@
-name: Build Debug APK
+name: Build Signed APK
 
 on:
   push:
@@ -23,23 +23,40 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Assemble debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Assemble signed release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          gradle assembleRelease --stacktrace -PappVersionCode="${{ github.run_number }}"
+          cp app/build/outputs/apk/release/app-release.apk RidmikPro-signed.apk
+
+      - name: Verify signature
+        run: |
+          APKSIGNER=$(ls $ANDROID_HOME/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs RidmikPro-signed.apk | head -5
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RidmikPro-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: RidmikPro-signed
+          path: RidmikPro-signed.apk
 
-      - name: Publish debug APK as a release
+      - name: Publish signed APK as the "latest" release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${GITHUB_REF_NAME}" = "main" ]; then TAG=debug-latest; else TAG=debug-${GITHUB_REF_NAME}; fi
-          cp app/build/outputs/apk/debug/app-debug.apk RidmikPro-debug.apk
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then TAG=latest; else TAG=latest-${GITHUB_REF_NAME}; fi
           gh release delete "$TAG" --cleanup-tag --yes || true
-          gh release create "$TAG" RidmikPro-debug.apk \
+          gh release create "$TAG" RidmikPro-signed.apk \
             --target "${GITHUB_SHA}" \
             --prerelease \
-            --title "Ridmik Pro debug build (${GITHUB_REF_NAME})" \
-            --notes "Automated debug build from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}. Install it directly (unknown sources allowed); it installs beside the original OpenRidmik."
+            --title "Ridmik Pro (signed, auto-build)" \
+            --notes "Latest signed build from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}. Installs beside the original OpenRidmik and updates in place over any previous signed build."

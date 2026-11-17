@@ -92,6 +92,8 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     private var forceLatin = false
     private var passwordField = false
     private var mode = Mode.ALPHA
+    /** 0 = swap rows instantly, ±1 = animated layout transition (alphabet ↔ symbols). */
+    private var rowAnimDir = 0
     private var shift = 0
     private var lastShiftTap = 0L
     private var enterLabel: String? = null
@@ -384,7 +386,12 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             jatiyo -> "জাতীয়"
             else -> "Avro"
         }
-        kbView.rows = rows
+        if (rowAnimDir != 0) {
+            kbView.transitionRows(rows, rowAnimDir)
+            rowAnimDir = 0
+        } else {
+            kbView.rows = rows
+        }
         updateBarVisibility()
     }
 
@@ -473,14 +480,17 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             Codes.SYMBOLS, Codes.SYM1 -> {
                 finishComposing(ic)
                 mode = Mode.SYM1
+                rowAnimDir = -1 // symbols slide in from the right
                 rebuild()
             }
             Codes.SYM2 -> {
                 mode = Mode.SYM2
+                rowAnimDir = -1
                 rebuild()
             }
             Codes.ALPHA -> {
                 mode = Mode.ALPHA
+                rowAnimDir = 1 // back to the alphabet
                 rebuild()
             }
             Codes.EMOJI -> showEmoji()
@@ -964,6 +974,12 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             openSettings()
             return
         }
+        val model = Prefs.getString(this, "gemini_model").trim()
+        if (model.isEmpty()) {
+            toast("Pick a Gemini model in Ridmik Pro settings (Voice typing)")
+            openSettings()
+            return
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             voicePending = true
             try {
@@ -996,11 +1012,16 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         }
         setVoiceState(VoiceState.BUSY)
         val key = Prefs.getString(this, "gemini_key").trim()
-        val model = Prefs.getString(this, "gemini_model", GeminiVoice.DEFAULT_MODEL).trim()
-            .ifEmpty { GeminiVoice.DEFAULT_MODEL }
+        val model = Prefs.getString(this, "gemini_model").trim()
+        // models the user fetched from Google earlier: tried (in order) if the chosen one is rejected
+        val fallbacks = Prefs.getString(this, "models_cache")
+            .split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != model }
+            .take(3)
         Thread {
             val res = try {
-                GeminiVoice.transcribe(key, model, wav)
+                GeminiVoice.transcribe(key, model, wav, fallbacks)
             } catch (e: Exception) {
                 VoiceResult.Error("Voice failed: ${e.message ?: "unknown"}")
             }
