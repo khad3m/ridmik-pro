@@ -3,6 +3,18 @@
 All notable changes to **Ridmik Pro** — an OpenRidmik fork with Gemini voice typing.
 Versioned releases: <https://github.com/khad3m/ridmik-pro/releases>
 
+## [v1.2.4] – 2026-11-17
+
+### Changed
+
+- **Ctrl shortcuts moved to the 3rd keyboard tab**: the top-toolbar Ctrl button and the top pill bar (All / Cut / Copy / Paste / Undo / Redo / ←Word / Word→) are gone. The same actions now live as a dedicated key row on the `=\<` symbols page — alphabet (ABC) is tab 1, `?123` is tab 2, `=\<` is tab 3, so the shortcut row appears only there. Tapping **Ctrl** on that row still turns letter keys into Ctrl combinations (accent highlight) until an action fires.
+- **Bigger top toolbar**: the scrollable toolbar icons got larger tap targets (46 dp), bigger glyphs, wider gaps between icons and a taller strip row, so the top of the keyboard looks less cramped.
+- Fixed the symbol pages: the Ctrl shortcut row was accidentally wired to the "Number row" setting (it appeared on both symbol pages or not at all); it is now hard-wired to the 3rd tab.
+
+### Fixed
+
+- **Settings — Backup & restore appearing multiple times**: the section had been accidentally nested inside the "text shortcut saved" handler, so every saved snippet appended another copy of "Backup & restore" with Export / Import rows. The section is now built once, in its own place between Text shortcuts and Keyboard keeps switching?.
+
 ## [v1.2.3] – 2026-11-17
 
 ### New

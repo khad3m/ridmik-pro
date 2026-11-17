@@ -476,6 +476,19 @@ class SettingsActivity : Activity() {
                         if (k.isNotEmpty() && v.isNotEmpty()) {
                             Snippets.add(this, k, v)
                             refreshSnippets()
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }.setTextColor(accent)
+            for ((k, v) in all) {
+                row(scard, false, "$k  →  $v", text("✕", 15f, muted)) {
+                    Snippets.remove(this, k)
+                    refreshSnippets()
+                }
+            }
+        }
+        refreshSnippets()
 
         // ---- backup & restore ----
         section("Backup & restore")
@@ -495,19 +508,6 @@ class SettingsActivity : Activity() {
             }
             startActivityForResult(i, 902)
         }
-                        }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }.setTextColor(accent)
-            for ((k, v) in all) {
-                row(scard, false, "$k  →  $v", text("✕", 15f, muted)) {
-                    Snippets.remove(this, k)
-                    refreshSnippets()
-                }
-            }
-        }
-        refreshSnippets()
 
         // ---- keyboard keeps switching? ----
         section("Keyboard keeps switching?")

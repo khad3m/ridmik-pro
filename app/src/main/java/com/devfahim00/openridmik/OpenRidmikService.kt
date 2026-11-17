@@ -79,10 +79,8 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     private val voiceRed = Color.rgb(0xE5, 0x39, 0x35)
     private var voiceStart = 0L
 
-    // Ctrl shortcut mode & bar
+    // Ctrl shortcut mode (toggled by the Ctrl key on the 3rd symbols tab)
     private var ctrlActive = false
-    private var ctrlBtn: TextView? = null
-    private var ctrlBar: HorizontalScrollView? = null
 
     // Stylish fonts & social formatters
     private var styleActive = false
@@ -287,10 +285,13 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         fun tool(kind: Int, onClick: () -> Unit): IconView {
             val v = IconView(this, kind).apply {
                 color = theme.text
+                scale = 0.64f
                 setOnClickListener { onClick() }
             }
             toolbarButtons.add(v)
-            toolbar.addView(v, lp(dp(38), LinearLayout.LayoutParams.MATCH_PARENT))
+            toolbar.addView(v, lp(dp(46), LinearLayout.LayoutParams.MATCH_PARENT).apply {
+                rightMargin = dp(4)
+            })
             return v
         }
         tool(Ico.CLIPBOARD) { showClipboard() }
@@ -299,16 +300,6 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         styleBtn = tool(Ico.FONT) { toggleStyleBar() }
         tool(Ico.NUMPAD) { showNumpad() }
         tool(Ico.TRACKPAD) { showTrackpad() }
-        ctrlBtn = TextView(this).apply {
-            text = "Ctrl"
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setTextColor(theme.text)
-            setOnClickListener { toggleCtrl() }
-        }
-        toolbarButtons.add(ctrlBtn!!)
-        toolbar.addView(ctrlBtn, lp(dp(42), LinearLayout.LayoutParams.MATCH_PARENT))
         tool(Ico.KEYMAP) { showKeyMap() }
         tool(Ico.ONEHAND) { cycleOneHand() }
         incognitoBtn = tool(Ico.INCOGNITO) { toggleIncognito() }
@@ -343,12 +334,9 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             }
         }
         strip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        strip.addView(toggleBtn, lp(dp(40), LinearLayout.LayoutParams.MATCH_PARENT))
+        strip.addView(toggleBtn, lp(dp(46), LinearLayout.LayoutParams.MATCH_PARENT))
         strip.addView(toolbarScroll, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         strip.addView(suggestionBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-        // Ctrl shortcut bar (visible when Ctrl mode is active)
-        ctrlBar = buildCtrlBar()
-        strip.addView(ctrlBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         styleBar = buildStyleBar()
         strip.addView(styleBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         // voice status row (visible only while the mic is recording / recognising)
@@ -359,9 +347,9 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             color = theme.text
             setOnClickListener { onMicTap() }
         }
-        strip.addView(micBtn, lp(dp(40), LinearLayout.LayoutParams.MATCH_PARENT))
+        strip.addView(micBtn, lp(dp(46), LinearLayout.LayoutParams.MATCH_PARENT))
         kbView = KeyboardView(this).also { it.listener = this }
-        root.addView(strip, lp(LinearLayout.LayoutParams.MATCH_PARENT, dp(40)))
+        root.addView(strip, lp(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
         root.addView(kbView, kbLayoutParams())
         rebuild()
         return root
@@ -479,16 +467,6 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         voiceDoneBtn?.setTextColor(theme.accentText)
         voiceDoneBtn?.background = rounded(theme.accent, 10)
         voiceClose?.color = theme.hint
-        ctrlBar?.let { bar ->
-            val p = bar.parent as? LinearLayout
-            val idx = p?.indexOfChild(bar) ?: -1
-            if (p != null && idx >= 0) {
-                p.removeViewAt(idx)
-                val newBar = buildCtrlBar()
-                ctrlBar = newBar
-                p.addView(newBar, idx, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-            }
-        }
         kbView.refreshTheme()
         syncNavBar()
     }
@@ -558,8 +536,9 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
                     else -> null
                 },
             )
-            Mode.SYM1 -> Layouts.symbols(1, Prefs.get(this, "numberRow"))
-            Mode.SYM2 -> Layouts.symbols(2, Prefs.get(this, "numberRow"))
+            // Ctrl shortcut keys live on the 3rd tab (=\< page) only
+            Mode.SYM1 -> Layouts.symbols(1, showCtrlRow = false)
+            Mode.SYM2 -> Layouts.symbols(2, showCtrlRow = true)
             Mode.NUM -> Layouts.numpad()
         }
         val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -633,7 +612,6 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             toggleBtn.visibility = View.GONE
             toolbarScroll.visibility = View.GONE
             suggestionBar.visibility = View.GONE
-            ctrlBar?.visibility = View.GONE
             styleBar?.visibility = View.GONE
             voiceBar?.visibility = View.VISIBLE
             micBtn?.visibility = View.VISIBLE
@@ -641,18 +619,6 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             return
         }
         voiceBar?.visibility = View.GONE
-        if (noPanel && ctrlActive) {
-            toggleBtn.visibility = View.GONE
-            toolbarScroll.visibility = View.GONE
-            suggestionBar.visibility = View.GONE
-            styleBar?.visibility = View.GONE
-            ctrlBar?.visibility = View.VISIBLE
-            micBtn?.visibility =
-                if (Prefs.get(this, "voice") && !passwordField) View.VISIBLE else View.GONE
-            micBtn?.color = theme.text
-            return
-        }
-        ctrlBar?.visibility = View.GONE
         if (noPanel && styleActive) {
             toggleBtn.visibility = View.GONE
             toolbarScroll.visibility = View.GONE
@@ -1428,43 +1394,6 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         pill("Title") { wrapOrTransform({ TextStyler.toTitleCase(it) }) }
         pill("Date") { currentInputConnection?.commitText(TextStyler.todayDate(), 1) }
         pill("Time") { currentInputConnection?.commitText(TextStyler.nowTime(), 1) }
-        return HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            visibility = View.GONE
-            addView(row)
-        }
-    }
-
-    private fun buildCtrlBar(): HorizontalScrollView {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-        }
-        fun pill(label: String, accentPill: Boolean = false, onClick: () -> Unit) {
-            row.addView(
-                TextView(this).apply {
-                    text = label
-                    textSize = 12f
-                    setTypeface(typeface, Typeface.BOLD)
-                    gravity = Gravity.CENTER
-                    setTextColor(if (accentPill) theme.accentText else theme.text)
-                    background = rounded(if (accentPill) theme.accent else theme.special, 8)
-                    setPadding(dp(10), 0, dp(10), 0)
-                    setOnClickListener { onClick() }
-                },
-                lp(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT).apply { rightMargin = dp(5) },
-            )
-        }
-        pill("✕", accentPill = true) { ctrlActive = false; updateBarVisibility() }
-        pill("All") { currentInputConnection?.let { execCtrlAction(it, 'a') } }
-        pill("Cut") { currentInputConnection?.let { clipAction(it, Codes.CUT) } }
-        pill("Copy") { currentInputConnection?.let { clipAction(it, Codes.COPY) } }
-        pill("Paste") { currentInputConnection?.let { clipAction(it, Codes.PASTE) } }
-        pill("Undo") { currentInputConnection?.let { execCtrlAction(it, 'z') } }
-        pill("Redo") { currentInputConnection?.let { execCtrlAction(it, 'y') } }
-        pill("←Word") { currentInputConnection?.let { sendCtrlKey(it, KeyEvent.KEYCODE_DPAD_LEFT) } }
-        pill("Word→") { currentInputConnection?.let { sendCtrlKey(it, KeyEvent.KEYCODE_DPAD_RIGHT) } }
         return HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             visibility = View.GONE
