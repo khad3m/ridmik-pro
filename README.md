@@ -12,7 +12,7 @@ Avro phonetic · Probhat · Jatiyo · Emoji · Clipboard manager · Number pad �
 
 ## What is different from OpenRidmik?
 
-This repository is a private fork of [devfahim00/OpenRidmik](https://github.com/devfahim00/OpenRidmik) with two changes:
+This repository is a fork of [devfahim00/OpenRidmik](https://github.com/devfahim00/OpenRidmik) with two changes:
 
 ### 1. 🎤 Voice typing with the Gemini API (free tier)
 
