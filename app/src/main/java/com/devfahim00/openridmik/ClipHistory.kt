@@ -68,4 +68,16 @@ object ClipHistory {
     fun clearUnpinned(c: Context) {
         save(c, load(c).filter { it.pinned })
     }
+
+    fun importPinned(c: Context, texts: List<String>) {
+        val list = load(c)
+        val existing = list.map { it.text }.toHashSet()
+        val now = System.currentTimeMillis()
+        for (t in texts.reversed()) {
+            if (t.isNotBlank() && t !in existing) {
+                list.add(0, Item(t, true, now))
+            }
+        }
+        save(c, list)
+    }
 }

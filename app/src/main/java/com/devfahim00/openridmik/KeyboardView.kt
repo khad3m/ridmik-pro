@@ -29,6 +29,15 @@ object Codes {
     const val CUT = -10
     const val COPY = -11
     const val PASTE = -12
+    const val CTRL = -13
+    const val CTRL_ALL = -14
+    const val CTRL_CUT = -15
+    const val CTRL_COPY = -16
+    const val CTRL_PASTE = -17
+    const val CTRL_UNDO = -18
+    const val CTRL_REDO = -19
+    const val CTRL_LEFT = -20
+    const val CTRL_RIGHT = -21
     const val SPACE = 32
 }
 
@@ -55,16 +64,30 @@ class KeyboardView(context: Context) : View(context) {
 
         /** Space bar dragged sideways: +1 for right, -1 for left, once per step of travel. */
         fun onSpaceSwipe(dir: Int) {}
+
+        /** Backspace swiped left: delete one whole word. */
+        fun onDeleteWord() {}
     }
 
     var listener: Listener? = null
     var haptic = true
+    var keyPreview = true
+    var keyBorders = true
+        set(v) {
+            field = v
+            invalidate()
+        }
     var enterLabel: String? = null
         set(v) {
             field = v
             invalidate()
         }
     var shiftState = 0
+        set(v) {
+            field = v
+            invalidate()
+        }
+    var ctrlActive = false
         set(v) {
             field = v
             invalidate()
@@ -148,7 +171,7 @@ class KeyboardView(context: Context) : View(context) {
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
-    private inner class Press(var key: Key, var rect: RectF, val startX: Float = 0f) {
+    private inner class Press(var key: Key, var rect: RectF, var startX: Float = 0f) {
         var longDone = false
         var fired = false
         /** True once a space-bar press has turned into a language-switching swipe. */
@@ -249,7 +272,7 @@ class KeyboardView(context: Context) : View(context) {
     fun transitionRows(newRows: List<List<Key>>) {
         fadeAnim?.cancel()
         if (width > 0 && height > 0 && rows.isNotEmpty() && rects.size == rows.size) {
-            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
             val c = Canvas(bmp)
             c.drawColor(cBg)
             drawKeys(c)
@@ -290,19 +313,23 @@ class KeyboardView(context: Context) : View(context) {
                 val pressed = presses.values.any { it.key === k }
                 val box = RectF(rc.left + gx, rc.top + gy, rc.right - gx, rc.bottom - gy)
                 val isEnter = k.code == Codes.ENTER
+                val isCtrlOn = k.code == Codes.CTRL && ctrlActive
                 fill.color = when {
                     pressed -> cPressed
-                    isEnter -> cAccent
+                    isEnter || isCtrlOn -> cAccent
                     k.special -> cSpecial
-                    else -> cKey
+                    keyBorders -> cKey
+                    else -> cBg
                 }
-                canvas.drawRoundRect(box, rad, rad, fill)
-                val fg = if (isEnter && !pressed) cAccentText else cText
+                if (keyBorders || pressed || isEnter || isCtrlOn || k.special) {
+                    canvas.drawRoundRect(box, rad, rad, fill)
+                }
+                val fg = if ((isEnter || isCtrlOn) && !pressed) cAccentText else cText
                 drawKeyContent(canvas, k, box, fg)
             }
         }
         for (p in presses.values) {
-            if (p.swiping) drawSwipePreview(canvas, p) else drawPreview(canvas, p)
+            if (p.swiping) drawSwipePreview(canvas, p) else if (keyPreview) drawPreview(canvas, p)
         }
     }
 
@@ -484,7 +511,7 @@ class KeyboardView(context: Context) : View(context) {
 
     private fun move(id: Int, x: Float, y: Float) {
         val p = presses[id] ?: return
-        if (p.key.code == Codes.SPACE && !p.longDone) {
+        if (p.key.code == Codes.SPACE && !p.longDone && spaceArrows) {
             if (!p.swiping && Math.abs(x - p.startX) > dp(22f)) {
                 p.swiping = true
                 handler.removeCallbacks(p.longRun)
@@ -497,6 +524,15 @@ class KeyboardView(context: Context) : View(context) {
                 if (haptic) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 listener?.onSpaceSwipe(if (x > p.startX) 1 else -1)
                 invalidate()
+            }
+            return
+        }
+        if (p.key.code == Codes.DELETE) {
+            if (x < p.startX - dp(28f)) {
+                handler.removeCallbacks(p.repeatRun)
+                p.startX = x
+                if (haptic) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                listener?.onDeleteWord()
             }
             return
         }

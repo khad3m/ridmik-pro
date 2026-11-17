@@ -26,21 +26,24 @@ object GeminiVoice {
 
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/"
 
-    private fun buildPrompt(langMode: String, autoPunct: Boolean): String {
+    private fun buildSystemInstruction(langMode: String, autoPunct: Boolean, cursorContext: String): String {
         val langRule = when (langMode) {
-            "bn" -> "The speech is in Bangla (Bengali). Transcribe in Bangla script (বাংলা)."
-            "en" -> "The speech is in English. Transcribe in English."
-            else -> "The speech may be in Bangla (Bengali), English, or a mix of both: keep every word in the language it was spoken in and NEVER translate."
+            "bn" -> "The speech is in Bangla (Bengali). Transcribe accurately in standard Bangla script (বাংলা)."
+            "en" -> "The speech is in English. Transcribe accurately in English."
+            else -> "The speech may be in Bangla (Bengali), English, or a natural mix of both (Banglish/code-switching). Keep every word in the language/script it was spoken in and NEVER translate."
         }
         val punctRule = if (autoPunct) {
-            "Add natural punctuation, spacing and sentence capitalisation."
+            "Add natural punctuation (use dari '।' for Bangla sentences and '.' for English), spacing, and sentence capitalisation."
         } else {
             "Keep spacing natural without adding extra punctuation."
         }
-        return "You are a speech-to-text engine. Transcribe the spoken audio exactly as said. " +
+        val ctxRule = if (cursorContext.isNotBlank()) {
+            " Preceding text before cursor (for language/topic/name continuity only, do not repeat it): \"${cursorContext.takeLast(100)}\""
+        } else ""
+        return "You are an accurate speech-to-text transcription engine. Transcribe ONLY the spoken audio verbatim. " +
             "$langRule $punctRule " +
-            "Return ONLY the transcription as plain text: no explanations, no quotes, no labels. " +
-            "If the audio contains no speech, return an empty string."
+            "Return ONLY the plain transcription text: no explanations, no markdown, no quotes, no speaker labels. " +
+            "If the audio contains no intelligible speech, return an empty string.$ctxRule"
     }
 
     /**
@@ -55,8 +58,9 @@ object GeminiVoice {
         fallbacks: List<String> = emptyList(),
         langMode: String = "auto",
         autoPunct: Boolean = true,
+        cursorContext: String = "",
     ): VoiceResult {
-        val prompt = buildPrompt(langMode, autoPunct)
+        val sysInst = buildSystemInstruction(langMode, autoPunct, cursorContext)
         val primary = model.trim().removePrefix("models/")
         val chain = mutableListOf(primary)
         for (f in fallbacks) {
@@ -65,7 +69,7 @@ object GeminiVoice {
         }
         var last = "Voice input failed"
         for (m in chain) {
-            when (val r = post(apiKey, m, audioBody(wav, m, prompt))) {
+            when (val r = post(apiKey, m, audioBody(wav, m, sysInst))) {
                 is VoiceResult.Text -> return r
                 is VoiceResult.Error -> if (r.modelProblem) last = r.message else return r
             }
@@ -149,17 +153,20 @@ object GeminiVoice {
         }
     }
 
-    /** Audio goes as two parts (prompt + inline WAV); a Part carries only one field, so they must not be merged. */
-    private fun audioBody(wav: ByteArray, model: String, prompt: String): JSONObject {
+    private fun audioBody(wav: ByteArray, model: String, sysInst: String): JSONObject {
         val b64 = Base64.encodeToString(wav, Base64.NO_WRAP)
         return JSONObject()
+            .put(
+                "systemInstruction",
+                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", sysInst))),
+            )
             .put(
                 "contents",
                 JSONArray().put(
                     JSONObject().put(
                         "parts",
                         JSONArray()
-                            .put(JSONObject().put("text", prompt))
+                            .put(JSONObject().put("text", "Transcribe this audio:"))
                             .put(
                                 JSONObject().put(
                                     "inline_data",
@@ -248,11 +255,11 @@ object GeminiVoice {
                 VoiceResult.Error("Free quota reached - wait a minute (rate limit) or a day (daily limit)")
             code == 401 || code == 403 || m.contains("permission denied") ->
                 VoiceResult.Error("Key rejected (403) - check the key restrictions in Google AI Studio")
+            code == 404 || m.contains("not found") || m.contains("not supported") || m.contains("does not support") ->
+                VoiceResult.Error("Model unavailable - trying the next one", modelProblem = true)
             // show Google's actual message so the cause is never hidden; the caller retries bare once
             code == 400 ->
                 VoiceResult.Error("Bad request (400): ${msg.take(160)}", retryBare = true)
-            code == 404 || m.contains("not found") || m.contains("not supported") || m.contains("does not support") ->
-                VoiceResult.Error("Model unavailable - trying the next one", modelProblem = true)
             code >= 500 ->
                 VoiceResult.Error("Gemini server busy - try again")
             else ->
@@ -392,9 +399,14 @@ class VoiceRecorder(
     private fun loop(rec: AudioRecord): ByteArray {
         val buf = ShortArray(1600) // 100 ms frames at 16 kHz
         val out = ByteArrayOutputStream(32768)
+        val preRoll = ArrayDeque<ByteArray>(4) // ~300ms pre-speech ring buffer
         var speech = false
         var quietMs = 0
         var totalMs = 0
+        var noiseAcc = 0f
+        var noiseFrames = 0
+        var threshold = SILENCE_RMS
+
         while (!stopRequested.get() && totalMs < MAX_MS) {
             val n = rec.read(buf, 0, buf.size)
             if (n < 0) break
@@ -409,19 +421,37 @@ class VoiceRecorder(
             }
             val rms = Math.sqrt(sum / n).toFloat()
             onLevel?.invoke((rms / 3500f).coerceIn(0f, 1f))
+            val frameBytes = ByteArray(n * 2)
             for (i in 0 until n) {
                 val v = buf[i].toInt()
-                out.write(v and 0xFF)
-                out.write(v shr 8 and 0xFF)
+                frameBytes[i * 2] = (v and 0xFF).toByte()
+                frameBytes[i * 2 + 1] = (v shr 8 and 0xFF).toByte()
             }
             val frameMs = maxOf(1, (n * 1000) / SAMPLE_RATE)
             totalMs += frameMs
-            if (rms > SILENCE_RMS) {
-                speech = true
+
+            // Adaptive noise floor calibration over the first ~200ms
+            if (!speech && totalMs <= 250) {
+                noiseAcc += rms
+                noiseFrames++
+                threshold = (noiseAcc / noiseFrames * 1.8f).coerceIn(SILENCE_RMS, 1600f)
+            }
+
+            if (rms > threshold) {
+                if (!speech) {
+                    speech = true
+                    while (preRoll.isNotEmpty()) out.write(preRoll.removeFirst())
+                }
                 quietMs = 0
+                out.write(frameBytes)
             } else if (speech) {
+                out.write(frameBytes)
                 quietMs += frameMs
                 if (quietMs >= silenceMs) break
+            } else {
+                if (preRoll.size >= 3) preRoll.removeFirst()
+                preRoll.addLast(frameBytes)
+                if (totalMs >= NO_SPEECH_MS) break
             }
         }
         val bytes = out.toByteArray()
@@ -434,6 +464,7 @@ class VoiceRecorder(
         /** ~ -23 dBFS; below this the mic counts as quiet. */
         const val SILENCE_RMS = 450f
         const val SILENCE_MS = 1800
+        const val NO_SPEECH_MS = 6500
         const val MAX_MS = 25000
         /** ~0.1 s of audio, the smallest amount sent to the API. */
         const val MIN_BYTES = 3200

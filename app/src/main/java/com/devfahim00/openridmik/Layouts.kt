@@ -111,11 +111,13 @@ object Layouts {
         Key(t, d.code, t, hint = if (bangla) d.toString() else null, alt = if (bangla) d.toString() else null)
     }
 
-    private fun bottom(alpha: Boolean, bangla: Boolean): List<Key> {
+    private fun bottom(alpha: Boolean, bangla: Boolean, dotAlt: String? = null, dotHint: String? = null): List<Key> {
         val first = if (alpha) special("?123", Codes.SYMBOLS, 1.4f) else special("ABC", Codes.ALPHA, 1.5f)
         val comma = Key(",", ','.code, ",", weight = if (alpha) 0.9f else 1f)
         val period = if (bangla && alpha) {
             Key("।", '.'.code, "।", alt = ".", hint = ".")
+        } else if (dotAlt != null) {
+            Key(".", '.'.code, ".", alt = dotAlt, hint = dotHint)
         } else {
             Key(".", '.'.code, ".")
         }
@@ -140,6 +142,8 @@ object Layouts {
         banglaDigits: Boolean,
         probhat: Boolean = false,
         jatiyo: Boolean = false,
+        dotAlt: String? = null,
+        dotHint: String? = null,
     ): List<List<Key>> {
         val rows = ArrayList<List<Key>>()
         if (numberRow) rows.add(digitRow(bangla && banglaDigits))
@@ -168,7 +172,7 @@ object Layouts {
                     listOf(special("", Codes.DELETE, 1.5f, repeat = true)),
             )
         }
-        rows.add(bottom(true, bangla))
+        rows.add(bottom(true, bangla, dotAlt, dotHint))
         return rows
     }
 
@@ -194,7 +198,19 @@ object Layouts {
         return rows
     }
 
-    fun symbols(page: Int): List<List<Key>> {
+    private fun ctrlShortcutRow(): List<Key> = listOf(
+        special("Ctrl", Codes.CTRL, 1.2f),
+        special("All", Codes.CTRL_ALL, 1.0f),
+        special("Cut", Codes.CTRL_CUT, 1.0f),
+        special("Copy", Codes.CTRL_COPY, 1.1f),
+        special("Paste", Codes.CTRL_PASTE, 1.2f),
+        special("Undo", Codes.CTRL_UNDO, 1.15f),
+        special("Redo", Codes.CTRL_REDO, 1.15f),
+        special("←", Codes.CTRL_LEFT, 1.1f),
+        special("→", Codes.CTRL_RIGHT, 1.1f),
+    )
+
+    fun symbols(page: Int, showCtrlRow: Boolean = true): List<List<Key>> {
         val rows = ArrayList<List<Key>>()
         rows.add("1234567890".map { plain(it) })
         if (page == 1) {
@@ -212,6 +228,7 @@ object Layouts {
                     listOf(special("", Codes.DELETE, 1.5f, repeat = true)),
             )
         }
+        if (showCtrlRow) rows.add(ctrlShortcutRow())
         rows.add(bottom(false, false))
         return rows
     }

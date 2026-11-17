@@ -74,15 +74,29 @@ class SettingsActivity : Activity() {
     private lateinit var swatchRow: LinearLayout
     private val heightBars = ArrayList<SeekBar>()
     private var batteryStatus: TextView? = null
+    private var imeStatus: TextView? = null
     private lateinit var apiKeyEdit: EditText
     private lateinit var modelEdit: EditText
 
     private fun isUnrestricted(): Boolean =
         (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
 
+    private fun imeSetupState(): String {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        val enabled = imm.enabledInputMethodList.any { it.packageName == packageName }
+        val active = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.startsWith("$packageName/") == true
+        return when {
+            active -> "Active ✓"
+            enabled -> "Enabled"
+            else -> "Off"
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         batteryStatus?.text = if (isUnrestricted()) "Unrestricted ✓" else "Restricted"
+        imeStatus?.text = imeSetupState()
     }
 
     override fun onPause() {
@@ -132,7 +146,9 @@ class SettingsActivity : Activity() {
         window.navigationBarColor = bg
         if (!Themes.isNight(this)) {
             @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            var flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+            if (Build.VERSION.SDK_INT >= 26) flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            window.decorView.systemUiVisibility = flags
         }
 
         val root = LinearLayout(this).apply {
@@ -250,7 +266,8 @@ class SettingsActivity : Activity() {
         // ---- keyboard ----
         section("Keyboard")
         val setup = card()
-        row(setup, true, "Enable Ridmik Pro", chevron()) {
+        imeStatus = text(imeSetupState(), 13f, accent, bold = true)
+        row(setup, true, "Enable Ridmik Pro", imeStatus) {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
         }
         row(setup, false, "Switch keyboard", chevron()) {
@@ -425,11 +442,72 @@ class SettingsActivity : Activity() {
         toggleRow(prefs, false, "Number row", "numberRow")
         toggleRow(prefs, false, "Bangla digits", "banglaDigits")
         toggleRow(prefs, false, "Word suggestions", "suggestions")
+        toggleRow(prefs, false, "Double-space for period", "doubleSpacePeriod")
+        toggleRow(prefs, false, "Key preview popup", "keyPreview")
+        toggleRow(prefs, false, "Auto-pair brackets & quotes", "autoPair")
+        toggleRow(prefs, false, "Key borders", "keyBorders")
         toggleRow(prefs, false, "Clipboard history", "clipboard")
         row(prefs, false, "Clear clipboard history", chevron()) {
             ClipHistory.clearUnpinned(this)
             Toast.makeText(this, "Cleared (pinned items kept)", Toast.LENGTH_SHORT).show()
         }
+
+        // ---- text shortcuts ----
+        section("Text shortcuts")
+        val scard = card()
+        fun refreshSnippets() {
+            scard.removeAllViews()
+            val all = Snippets.all(this)
+            row(scard, true, "+ Add shortcut", chevron()) {
+                val box = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(20), dp(10), dp(20), 0)
+                }
+                val kEd = EditText(this).apply { hint = "Shortcut (e.g. @@, addr)" }
+                val vEd = EditText(this).apply { hint = "Full text" }
+                box.addView(kEd)
+                box.addView(vEd)
+                AlertDialog.Builder(this)
+                    .setTitle("New text shortcut")
+                    .setView(box)
+                    .setPositiveButton("Save") { _, _ ->
+                        val k = kEd.text.toString().trim()
+                        val v = vEd.text.toString().trim()
+                        if (k.isNotEmpty() && v.isNotEmpty()) {
+                            Snippets.add(this, k, v)
+                            refreshSnippets()
+
+        // ---- backup & restore ----
+        section("Backup & restore")
+        val bcard = card()
+        row(bcard, true, "Export backup (JSON)", chevron()) {
+            val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, "ridmik-pro-backup.json")
+            }
+            startActivityForResult(i, 901)
+        }
+        row(bcard, false, "Import backup (JSON)", chevron()) {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+            startActivityForResult(i, 902)
+        }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }.setTextColor(accent)
+            for ((k, v) in all) {
+                row(scard, false, "$k  →  $v", text("✕", 15f, muted)) {
+                    Snippets.remove(this, k)
+                    refreshSnippets()
+                }
+            }
+        }
+        refreshSnippets()
 
         // ---- keyboard keeps switching? ----
         section("Keyboard keeps switching?")
@@ -805,6 +883,56 @@ class SettingsActivity : Activity() {
                 OpenRidmikService.live?.reloadFromPrefs()
             }
             swatchRow.addView(cell)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        when (requestCode) {
+            901 -> {
+                try {
+                    val snips = org.json.JSONObject()
+                    for ((k, v) in Snippets.all(this)) snips.put(k, v)
+                    val pinned = org.json.JSONArray()
+                    for (item in ClipHistory.ordered(this)) if (item.pinned) pinned.put(item.text)
+                    val rootObj = org.json.JSONObject()
+                        .put("userdict", UserDict.exportJson(this))
+                        .put("snippets", snips)
+                        .put("pinned_clips", pinned)
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(rootObj.toString(2).toByteArray(Charsets.UTF_8))
+                    }
+                    Toast.makeText(this, "Backup exported ✓", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            902 -> {
+                try {
+                    val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: return
+                    val rootObj = org.json.JSONObject(raw)
+                    rootObj.optJSONObject("userdict")?.let { UserDict.importJson(this, it) }
+                    rootObj.optJSONObject("snippets")?.let { s ->
+                        val keys = s.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            Snippets.add(this, k, s.optString(k))
+                        }
+                    }
+                    rootObj.optJSONArray("pinned_clips")?.let { arr ->
+                        val list = ArrayList<String>(arr.length())
+                        for (i in 0 until arr.length()) list.add(arr.optString(i))
+                        ClipHistory.importPinned(this, list)
+                    }
+                    Toast.makeText(this, "Backup restored ✓", Toast.LENGTH_SHORT).show()
+                    recreate()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Invalid backup file", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 }

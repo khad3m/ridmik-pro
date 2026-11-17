@@ -3,6 +3,25 @@
 All notable changes to **Ridmik Pro** — an OpenRidmik fork with Gemini voice typing.
 Versioned releases: <https://github.com/khad3m/ridmik-pro/releases>
 
+## [v1.2.3] – 2026-11-17
+
+### New
+
+- **GIF panel**: emoji panel gets a GIF tab — animated Noto emoji GIFs (downloaded from Google's public font CDN, no API key) that can be previewed and sent into any chat app through a FileProvider; GIFs are cached on-device.
+- **Text snippets / shortcuts**: personal abbreviations (e.g. `salam` → `আসসালামু আলাইকুম`) expand while typing; managed in Settings, stored on-device.
+- **Stylish text**: Unicode font styles (bold, italic, script…) and social-formatting tools that can wrap or transform the current text for WhatsApp / Facebook etc.
+- **One-handed mode**: shift the whole keyboard left or right for reachability.
+- **Incognito mode**: a toolbar toggle that stops suggestion learning and clipboard history for the current session.
+- **Borderless keys + key-preview toggle**: new appearance options (key borders on/off, key-pop preview on/off), and Ctrl shortcuts are now real keyboard keys with an accent highlight while active.
+- **Backspace word-delete**: swipe left on backspace deletes a whole word.
+- **New toggles in Settings**: double-space period, auto character pairing, key borders, key preview.
+
+### Improved
+
+- **Voice**: the prompt moved to `systemInstruction`, includes the last 100 characters before the cursor for language / topic continuity, Bangla sentences get dari (।) punctuation, and Banglish / code-switched speech transcribes more accurately.
+- **User dictionary** now lives in a dedicated JSON file (no more SharedPreferences ANR stalls), migrates the old data automatically and is capped at 2000 words / 4000 pairs for low RAM.
+- Keyboard bitmaps render in RGB_565 (about half the memory) and pinned clipboard items can be bulk-imported.
+
 ## [v1.2.2] – 2026-11-17
 
 ### New

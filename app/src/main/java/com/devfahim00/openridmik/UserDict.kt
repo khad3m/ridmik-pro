@@ -2,15 +2,17 @@ package com.devfahim00.openridmik
 
 import android.content.Context
 import org.json.JSONObject
+import java.io.File
 
 /**
  * On-device learning of the user's own typing: word frequencies and word-pair (bigram) counts.
- * Used to rank prefix suggestions and to predict the next word. Never leaves the device.
+ * Stored in a dedicated file (avoiding SharedPreferences ANR stalls) and capped for low RAM.
  */
 object UserDict {
-    private const val FILE = "openridmik_userdict"
-    private const val MAX_WORDS = 4000
-    private const val MAX_PAIRS = 8000
+    private const val LEGACY_PREFS = "openridmik_userdict"
+    private const val FILE_NAME = "userdict.json"
+    private const val MAX_WORDS = 2000
+    private const val MAX_PAIRS = 4000
     private const val SAVE_EVERY = 8
 
     private val words = HashMap<String, Int>()
@@ -21,14 +23,23 @@ object UserDict {
     /** Latin words are stored lower-case so "The" and "the" count together. */
     fun norm(w: String): String = if (w.isNotEmpty() && (w[0] in 'a'..'z' || w[0] in 'A'..'Z')) w.lowercase() else w
 
-    private fun sp(c: Context) = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    private fun file(c: Context) = File(c.applicationContext.filesDir, FILE_NAME)
 
     @Synchronized
     private fun ensure(c: Context) {
         if (loaded) return
         loaded = true
         try {
-            val o = JSONObject(sp(c).getString("data", "{}") ?: "{}")
+            val f = file(c)
+            val raw = if (f.exists()) {
+                f.readText()
+            } else {
+                val sp = c.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
+                val leg = sp.getString("data", null)
+                if (!leg.isNullOrEmpty()) sp.edit().remove("data").apply()
+                leg ?: "{}"
+            }
+            val o = JSONObject(raw)
             o.optJSONObject("w")?.let { j -> j.keys().forEach { words[it] = j.getInt(it) } }
             o.optJSONObject("p")?.let { j -> j.keys().forEach { pairs[it] = j.getInt(it) } }
         } catch (e: Exception) {
@@ -44,13 +55,15 @@ object UserDict {
         val w = HashMap(words)
         val p = HashMap(pairs)
         val app = c.applicationContext
-        // serialising a few thousand entries is kept off the main thread so typing never stalls
         Thread {
             try {
                 val o = JSONObject()
                 o.put("w", JSONObject(w as Map<*, *>))
                 o.put("p", JSONObject(p as Map<*, *>))
-                sp(app).edit().putString("data", o.toString()).apply()
+                val target = file(app)
+                val tmp = File(app.filesDir, "$FILE_NAME.tmp")
+                tmp.writeText(o.toString())
+                if (!tmp.renameTo(target)) target.writeText(o.toString())
             } catch (e: Exception) {
                 CrashLog.record(app, "UserDict.save", e)
             }
@@ -109,5 +122,24 @@ object UserDict {
             .take(max)
             .map { it.key.substring(pre.length) }
             .toList()
+    }
+
+    @Synchronized
+    fun exportJson(c: Context): JSONObject {
+        ensure(c)
+        return JSONObject()
+            .put("w", JSONObject(words as Map<*, *>))
+            .put("p", JSONObject(pairs as Map<*, *>))
+    }
+
+    @Synchronized
+    fun importJson(c: Context, o: JSONObject) {
+        ensure(c)
+        o.optJSONObject("w")?.let { j -> j.keys().forEach { k -> words[k] = maxOf(words[k] ?: 0, j.optInt(k, 1)) } }
+        o.optJSONObject("p")?.let { j -> j.keys().forEach { k -> pairs[k] = maxOf(pairs[k] ?: 0, j.optInt(k, 1)) } }
+        prune(words, MAX_WORDS)
+        prune(pairs, MAX_PAIRS)
+        dirty++
+        save(c)
     }
 }

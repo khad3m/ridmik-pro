@@ -40,5 +40,10 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
+        <provider
+            android:name=".GifFileProvider"
+            android:authorities="${applicationId}.gifprovider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

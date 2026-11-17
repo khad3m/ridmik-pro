@@ -30,6 +30,11 @@ object Ico {
     const val MIC = 19
     const val STAR = 20
     const val COPY = 21
+    const val GIF = 22
+    const val ONEHAND = 23
+    const val INCOGNITO = 24
+    const val TRACKPAD = 25
+    const val FONT = 26
 
     fun forGroup(name: String): Int = when (name) {
         "Smileys & Emotion" -> SMILE
@@ -262,6 +267,44 @@ class IconView(ctx: Context, var kind: Int) : View(ctx) {
             Ico.COPY -> {
                 c.drawRoundRect(RectF(-3f, -8f, 8f, 4f), 2f, 2f, stroke)
                 c.drawRoundRect(RectF(-8f, -4f, 3f, 8f), 2f, 2f, stroke)
+            }
+            Ico.GIF -> {
+                c.drawRoundRect(RectF(-10f, -7.5f, 10f, 7.5f), 3f, 3f, stroke)
+                val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = this@IconView.color
+                    textSize = 9.2f
+                    textAlign = Paint.Align.CENTER
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                }
+                val y = -(p.descent() + p.ascent()) / 2f
+                c.drawText("GIF", 0f, y, p)
+            }
+            Ico.ONEHAND -> {
+                c.drawRoundRect(RectF(-8f, -10f, 8f, 10f), 2.5f, 2.5f, stroke)
+                c.drawRoundRect(RectF(-5f, -3f, 5f, 7f), 1.5f, 1.5f, stroke)
+                c.drawLine(-2f, -7f, 2f, -7f, stroke)
+            }
+            Ico.INCOGNITO -> {
+                c.drawLine(-10f, -2f, 10f, -2f, stroke)
+                c.drawRoundRect(RectF(-6f, -9f, 6f, -2f), 2f, 2f, stroke)
+                c.drawCircle(-4.5f, 4.5f, 3.2f, stroke)
+                c.drawCircle(4.5f, 4.5f, 3.2f, stroke)
+                c.drawLine(-1.3f, 4.5f, 1.3f, 4.5f, stroke)
+            }
+            Ico.TRACKPAD -> {
+                c.drawRoundRect(RectF(-9f, -8f, 9f, 8f), 2.5f, 2.5f, stroke)
+                c.drawLine(-4f, 0f, 4f, 0f, stroke)
+                c.drawLine(0f, -4f, 0f, 4f, stroke)
+            }
+            Ico.FONT -> {
+                val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = this@IconView.color
+                    textSize = 13f
+                    textAlign = Paint.Align.CENTER
+                    typeface = android.graphics.Typeface.SERIF
+                }
+                val y = -(p.descent() + p.ascent()) / 2f
+                c.drawText("Aa", 0f, y, p)
             }
             Ico.DELETE -> {
                 val p = Path().apply {

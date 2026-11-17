@@ -4,7 +4,7 @@
 
 **Private build of OpenRidmik with Gemini-powered voice typing (Bangla + English)**
 
-Avro phonetic · Probhat · Jatiyo · Emoji & Kaomoji · Clipboard manager · Number pad · Themes · **⌨️ Ctrl shortcuts** · **🎤 Voice typing**
+Avro phonetic · Probhat · Jatiyo · Emoji & Kaomoji & **GIF** · Clipboard manager · Number pad · Themes · **⌨️ Ctrl shortcuts** · **Text snippets & styles** · **🎤 Voice typing**
 
 </div>
 
@@ -41,10 +41,10 @@ Everything else (Avro/Probhat/Jatiyo layouts, suggestions, emoji, clipboard, the
 Push a tag to build a named signed release:
 
 ```bash
-git tag v1.2.2 && git push origin v1.2.2
+git tag v1.2.3 && git push origin v1.2.3
 ```
 
-The Release workflow outputs `RidmikPro-v1.2.2.apk` as a GitHub release. All signed builds share one key, so they update in place.
+The Release workflow outputs `RidmikPro-v1.2.3.apk` as a GitHub release. All signed builds share one key, so they update in place.
 
 Full release history: [CHANGELOG.md](CHANGELOG.md).
 

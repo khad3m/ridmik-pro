@@ -13,6 +13,10 @@ object Prefs {
         "voice" to true,
         "voice_punct" to true,
         "voice_haptic" to true,
+        "doubleSpacePeriod" to true,
+        "keyPreview" to true,
+        "autoPair" to true,
+        "keyBorders" to true,
         "lang_en" to true,
         "lang_avro" to true,
         "lang_probhat" to false,
@@ -92,4 +96,7 @@ object Prefs {
         "relaxed" -> 2800
         else -> 1800
     }
+
+    /** One-handed mode: "off", "right", "left". */
+    fun oneHand(c: Context): String = getString(c, "one_hand", "off").ifEmpty { "off" }
 }
