@@ -46,6 +46,8 @@ git tag v1.2.1 && git push origin v1.2.1
 
 The Release workflow outputs `RidmikPro-v1.2.1.apk` as a GitHub release. All signed builds share one key, so they update in place.
 
+Full release history: [CHANGELOG.md](CHANGELOG.md).
+
 ## 🏗️ Build from source
 
 ```bash
