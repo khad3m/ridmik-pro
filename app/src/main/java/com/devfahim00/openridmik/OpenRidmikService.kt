@@ -536,8 +536,9 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
                     else -> null
                 },
             )
-            // Ctrl shortcut keys live on the 3rd tab (=\< page) only
-            Mode.SYM1 -> Layouts.symbols(1, showCtrlRow = false)
+            // Ctrl shortcut row on both symbols pages keeps every mode the same
+            // height: with the number row on, all layouts show 6 rows (toolbar + 5)
+            Mode.SYM1 -> Layouts.symbols(1, showCtrlRow = true)
             Mode.SYM2 -> Layouts.symbols(2, showCtrlRow = true)
             Mode.NUM -> Layouts.numpad()
         }

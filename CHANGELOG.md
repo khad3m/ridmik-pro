@@ -3,6 +3,12 @@
 All notable changes to **Ridmik Pro** — an OpenRidmik fork with Gemini voice typing.
 Versioned releases: <https://github.com/khad3m/ridmik-pro/releases>
 
+## [v1.2.5] – 2026-11-17
+
+### Fixed
+
+- **Uniform layout heights again — every mode is 6 rows**: v1.2.4 had left the Ctrl shortcut row only on the `=\<` page, so the `?123` page came out one row shorter (5 rows) than the rest and the layouts looked inconsistent. The Ctrl row (Ctrl / All / Cut / Copy / Paste / Undo / Redo / ← / →) is back on **both** symbols pages, hard-wired and no longer tied to any setting. With the number row enabled every layout — alphabet, `?123`, `=\<` and the number pad — now shows the same 6 rows (toolbar + 5 key rows).
+
 ## [v1.2.4] – 2026-11-17
 
 ### Changed
