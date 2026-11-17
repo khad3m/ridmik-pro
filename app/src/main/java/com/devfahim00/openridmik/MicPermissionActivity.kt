@@ -31,7 +31,9 @@ class MicPermissionActivity : Activity() {
         if (requestCode != 1) return
         if (results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED) {
             resumeVoice()
-        } else if (!shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+        } else {
+            OpenRidmikService.live?.onMicPermissionDenied()
+            if (!shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
             // "Don't ask again" was picked: send the user to the app info page where the mic can be enabled
             try {
                 startActivity(
@@ -41,8 +43,9 @@ class MicPermissionActivity : Activity() {
             } catch (e: Exception) {
             }
             Toast.makeText(this, "Enable Microphone permission for voice typing", Toast.LENGTH_LONG).show()
-        } else {
-            Toast.makeText(this, "Microphone permission is needed for voice typing", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "Microphone permission is needed for voice typing", Toast.LENGTH_LONG).show()
+            }
         }
         finish()
     }

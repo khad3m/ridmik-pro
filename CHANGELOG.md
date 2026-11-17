@@ -1,7 +1,26 @@
 # Changelog
 
-All notable changes to **Ridmik Pro** — the private OpenRidmik fork with Gemini voice typing.
+All notable changes to **Ridmik Pro** — an OpenRidmik fork with Gemini voice typing.
 Versioned releases: <https://github.com/khad3m/ridmik-pro/releases>
+
+## [v1.2.2] – 2026-11-17
+
+### New
+
+- **Ctrl shortcut bar**: a Ctrl button in the toolbar opens a pill bar — Select all, Cut, Copy, Paste, Undo, Redo, ←Word, Word→. While it is active, letter keys act as Ctrl combinations and the bar closes after one action.
+- **Voice waveform**: the voice bar shows an animated 5-bar waveform that follows the live microphone level while recording and a busy animation while recognising (replaces the blinking dot), plus a **Done** button to stop recording manually.
+- **Voice settings**: language mode (Auto / Bangla only / English only), auto-punctuation on/off, silence auto-stop speed (fast 1.2 s / normal 1.8 s / relaxed 2.8 s) and haptic feedback on voice start / stop / commit.
+- **Clipboard panel upgrade**: item count ("N saved · M pinned"), a Pinned/All filter, relative timestamps ("2m ago"), char counts, a PINNED badge with accent outline, tap-a-card-to-paste, a one-tap copy button per card, long clips span the full grid width — and the history now keeps 60 unpinned items (was 40).
+- **Kaomoji & Symbols** group in the emoji panel.
+- **Live settings**: theme, layout, keyboard height and toggles now apply immediately — the running keyboard reloads itself when a setting changes, no reopen needed.
+
+### Improved
+
+- **RAM**: suggestion dictionaries load through streams instead of full strings, only the active language's dictionary is warmed up, and the emoji cache is cleared on memory pressure (`onTrimMemory` / `onLowMemory`).
+- **Mic permission flow**: after granting permission, voice typing resumes automatically within a 30-second window — even if the keyboard was closed and reopened in between; a denied permission now resets the pending state cleanly.
+- The user dictionary is saved when the service shuts down, and the keyboard rebuilds itself on orientation change.
+- The key-pop preview no longer clips at the top of the keyboard.
+- Voice requests: model names are trimmed and `models/` prefixes stripped everywhere, the model filter excludes image / robotics / computer-use models, "thought" response parts are skipped, and the API-key field has a Show/Hide toggle.
 
 ## [v1.2.1] – 2026-11-17
 

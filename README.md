@@ -4,7 +4,7 @@
 
 **Private build of OpenRidmik with Gemini-powered voice typing (Bangla + English)**
 
-Avro phonetic · Probhat · Jatiyo · Emoji · Clipboard manager · Number pad · Themes · **🎤 Voice typing**
+Avro phonetic · Probhat · Jatiyo · Emoji & Kaomoji · Clipboard manager · Number pad · Themes · **⌨️ Ctrl shortcuts** · **🎤 Voice typing**
 
 </div>
 
@@ -19,13 +19,13 @@ This repository is a fork of [devfahim00/OpenRidmik](https://github.com/devfahim
 - A **mic button at the top-right corner** of the keyboard (next to the toolbar strip).
 - Tap the mic → speak in **Bangla, English or a mix of both** → the recognised text lands at the cursor with natural punctuation.
 - The audio is recorded on-device (16 kHz WAV) and sent **directly to Google's Gemini API with your own key** — no other server in between, nothing stored.
-- Recording stops by itself after a pause (1.8 s of quiet) or a 25 s cap, or tap the mic again to stop early. Tap while "Recognising…" shows to cancel.
+- Recording stops by itself after a pause (1.8 s of quiet by default — configurable) or a 25 s cap, or tap **Done** / the mic again to stop early. Tap while "Recognising…" shows to cancel.
 - **Setup (once)**: open *Ridmik Pro → Settings → Voice typing*, paste a free API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey), tap **Fetch model list** to load every model your key can use straight from Google (no hardcoded list — you can also type a model name manually), then **Save & Test**. On the first mic tap Android asks for the microphone permission.
 - If the chosen model is ever rejected, voice typing automatically falls back to other models from the fetched list. Errors (bad key, quota, offline, region blocks) surface as clear, specific messages — typing itself never breaks.
 
 ### 2. Small cleanups
 
-- The "update available" checker that pointed at the original public repo was removed (this repo is private; updates come from its own releases).
+- The "update available" checker that pointed at the original public repo was removed (updates come from this repo's own releases).
 - `applicationId` is **`com.ridmik.pro`** and the launcher label is **Ridmik Pro**, so it installs **side by side** with the original OpenRidmik — no need to uninstall anything.
 
 Everything else (Avro/Probhat/Jatiyo layouts, suggestions, emoji, clipboard, themes, numpad) is unchanged from the upstream project.
@@ -41,10 +41,10 @@ Everything else (Avro/Probhat/Jatiyo layouts, suggestions, emoji, clipboard, the
 Push a tag to build a named signed release:
 
 ```bash
-git tag v1.2.1 && git push origin v1.2.1
+git tag v1.2.2 && git push origin v1.2.2
 ```
 
-The Release workflow outputs `RidmikPro-v1.2.1.apk` as a GitHub release. All signed builds share one key, so they update in place.
+The Release workflow outputs `RidmikPro-v1.2.2.apk` as a GitHub release. All signed builds share one key, so they update in place.
 
 Full release history: [CHANGELOG.md](CHANGELOG.md).
 

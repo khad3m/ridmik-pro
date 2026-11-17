@@ -33,6 +33,11 @@ object EmojiData {
     }
 
     @Synchronized
+    fun clearCache() {
+        cache = null
+    }
+
+    @Synchronized
     fun groups(c: Context): List<Group> {
         cache?.let { return it }
         val result = ArrayList<Group>()
@@ -62,29 +67,24 @@ object EmojiData {
         } catch (ex: Exception) {
             // asset missing: fall back to an empty catalogue
         }
-        val merged = mergeGroups(result)
-        cache = merged
-        return merged
+        result.add(kaomojiGroup())
+        cache = result
+        return result
     }
 
-    /** People & Body goes into the first (face) group; Symbols goes into Objects (bulb). */
-    private fun mergeGroups(src: List<Group>): List<Group> {
-        fun find(n: String) = src.firstOrNull { it.name == n }
-        val people = find("People & Body")
-        val symbols = find("Symbols")
-        val out = ArrayList<Group>()
-        for (g in src) {
-            when {
-                g === people || g === symbols -> continue
-                g.name == "Smileys & Emotion" && people != null -> out.add(Group(g.name, g.icon, g.items + people.items))
-                g.name == "Objects" && symbols != null -> out.add(Group(g.name, g.icon, g.items + symbols.items))
-                else -> out.add(g)
-            }
-        }
-        // no Smileys/Objects group to merge into: keep the originals
-        if (find("Smileys & Emotion") == null && people != null) out.add(0, people)
-        if (find("Objects") == null && symbols != null) out.add(symbols)
-        return out
+    private fun kaomojiGroup(): Group {
+        val list = listOf(
+            "(◕‿◕)", "(｡♥‿♥｡)", "¯\\_(ツ)_/¯", "(╯°□°）╯︵ ┻━┻", "┬─┬ノ( º _ ºノ)",
+            "(づ｡◕‿‿◕｡)づ", "(ಥ﹏ಥ)", "(ง •̀_•́)ง", "(¬‿¬)", "(☞ﾟヮﾟ)☞",
+            "ʕ•ᴥ•ʔ", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧", "(•_•)", "(ಠ_ಠ)", "(≧▽≦)",
+            "(つ✧ω✧)つ", "(｡•́︿•̀｡)", "(＾▽＾)", "(´･_･`)", "(♥_♥)",
+            "★", "☆", "♥", "♡", "❥", "❣", "✨", "⚡", "✓", "✔", "✗", "✘",
+            "•", "◦", "▪", "▫", "→", "←", "↑", "↓", "↔", "⇒", "⇔",
+            "°", "±", "×", "÷", "∞", "≈", "≠", "≤", "≥",
+            "৳", "€", "£", "¥", "©", "®", "™", "§", "¶", "†", "‡", "※",
+            "♠", "♣", "♦",
+        ).map { Emoji(it, false) }
+        return Group("Kaomoji & Symbols", "★", list)
     }
 
     /** Inserts a skin-tone modifier after the first code point (dropping a variation selector if present). */

@@ -5,7 +5,10 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
@@ -13,6 +16,8 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.view.HapticFeedbackConstants
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
@@ -34,16 +39,10 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
 
     private lateinit var avro: AvroEngine
     private val dictBn: Suggester by lazy {
-        Suggester(
-            assets.open("words_bn.txt").bufferedReader().use { it.readText() },
-            assets.open("next_bn.txt").bufferedReader().use { it.readText() },
-        )
+        Suggester(assets.open("words_bn.txt"), assets.open("next_bn.txt"))
     }
     private val dictEn: Suggester by lazy {
-        Suggester(
-            assets.open("words_en.txt").bufferedReader().use { it.readText() },
-            assets.open("next_en.txt").bufferedReader().use { it.readText() },
-        )
+        Suggester(assets.open("words_en.txt"), assets.open("next_en.txt"))
     }
     private lateinit var root: LinearLayout
     private lateinit var toolbar: LinearLayout
@@ -64,18 +63,79 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     private var micBtn: IconView? = null
     private var voiceBar: LinearLayout? = null
     private var voiceStatus: TextView? = null
-    private var voiceDot: IconView? = null
+    private var voiceWave: VoiceWaveView? = null
+    private var voiceDoneBtn: TextView? = null
     private var voiceClose: IconView? = null
     private val voiceRed = Color.rgb(0xE5, 0x39, 0x35)
     private var voiceStart = 0L
 
+    // Ctrl shortcut mode & bar
+    private var ctrlActive = false
+    private var ctrlBtn: TextView? = null
+    private var ctrlBar: HorizontalScrollView? = null
+    private var clipPinnedOnly = false
+
+    private inner class VoiceWaveView(ctx: android.content.Context) : View(ctx) {
+        private val bars = FloatArray(5) { 0.15f }
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var busy = false
+        private var phase = 0f
+
+        fun setLevel(lvl: Float) {
+            busy = false
+            val weights = floatArrayOf(0.55f, 0.85f, 1.0f, 0.8f, 0.5f)
+            for (i in bars.indices) {
+                val target = (0.15f + lvl * weights[i]).coerceIn(0.15f, 1f)
+                bars[i] = bars[i] * 0.45f + target * 0.55f
+            }
+            invalidate()
+        }
+
+        fun setBusy(b: Boolean) {
+            busy = b
+            if (!b) for (i in bars.indices) bars[i] = 0.2f
+            invalidate()
+        }
+
+        fun tickBusy() {
+            if (!busy) return
+            phase += 0.55f
+            for (i in bars.indices) {
+                bars[i] = (0.35f + 0.35f * kotlin.math.sin((phase + i * 0.8).toDouble()).toFloat()).coerceIn(0.15f, 0.9f)
+            }
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            paint.color = if (busy) theme.accent else voiceRed
+            val bw = dp(3).toFloat()
+            val gap = dp(3).toFloat()
+            val totalW = bars.size * bw + (bars.size - 1) * gap
+            var x = (width - totalW) / 2f
+            val maxH = (height - dp(12)).coerceAtLeast(dp(8)).toFloat()
+            val cy = height / 2f
+            for (v in bars) {
+                val bh = (maxH * v).coerceAtLeast(dp(4).toFloat())
+                canvas.drawRoundRect(RectF(x, cy - bh / 2f, x + bw, cy + bh / 2f), bw / 2f, bw / 2f, paint)
+                x += bw + gap
+            }
+        }
+    }
+
     private val blinkRun = object : Runnable {
         override fun run() {
-            if (voiceState != VoiceState.REC) return
-            val v = voiceDot ?: return
-            v.alpha = if (v.alpha > 0.4f) 0.35f else 1f
-            voiceStatus?.text = "Listening… speak now · ${(System.currentTimeMillis() - voiceStart) / 1000}s"
-            ui.postDelayed(this, 500)
+            when (voiceState) {
+                VoiceState.REC -> {
+                    val secs = (System.currentTimeMillis() - voiceStart) / 1000
+                    voiceStatus?.text = "Listening… ${secs}s"
+                    ui.postDelayed(this, 400)
+                }
+                VoiceState.BUSY -> {
+                    voiceWave?.tickBusy()
+                    ui.postDelayed(this, 90)
+                }
+                VoiceState.IDLE -> {}
+            }
         }
     }
 
@@ -84,6 +144,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     private var voiceState = VoiceState.IDLE
     private var voiceGen = 0
     private var voicePending = false
+    private var voicePendingUntil = 0L
     private var recorder: VoiceRecorder? = null
 
     private var bangla = true
@@ -126,19 +187,45 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         clipboard?.addPrimaryClipChangedListener(clipListener)
         avro = AvroEngine(assets.open("avro_rules.txt").bufferedReader().use { it.readText() })
         theme = Themes.current(this)
-        // Warm up the emoji catalogue and the word lists off the main thread.
-        Thread { EmojiData.groups(applicationContext) }.start()
+        // Warm up only the active language dictionary off the main thread to keep RAM low.
         Thread {
-            dictBn.top(1)
-            dictEn.top(1)
+            if (Prefs.isBangla(applicationContext)) dictBn.top(1) else dictEn.top(1)
         }.start()
     }
 
     override fun onDestroy() {
         cancelVoice()
+        ui.removeCallbacksAndMessages(null)
+        UserDict.save(this)
         if (live === this) live = null
         clipboard?.removePrimaryClipChangedListener(clipListener)
         super.onDestroy()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (panel == null) EmojiData.clearCache()
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        if (panel == null) EmojiData.clearCache()
+    }
+
+    /** Called by SettingsActivity so theme, layout, height and toggles apply immediately. */
+    fun reloadFromPrefs() {
+        ui.post {
+            if (!::root.isInitialized) return@post
+            if (!forceLatin) {
+                bangla = Prefs.isBangla(this)
+                probhat = Prefs.layout(this) == "probhat"
+                jatiyo = Prefs.layout(this) == "jatiyo"
+                val on = Prefs.enabledLangs(this)
+                if (currentLang() !in on) applyLangFlags(on.first())
+            }
+            applyTheme()
+            rebuild()
+        }
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
@@ -180,6 +267,16 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         tool(Ico.NUMPAD) { showNumpad() }
         tool(Ico.KEYMAP) { showKeyMap() }
         tool(Ico.PALETTE) { cycleTheme() }
+        ctrlBtn = TextView(this).apply {
+            text = "Ctrl"
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(theme.text)
+            setOnClickListener { toggleCtrl() }
+        }
+        toolbarButtons.add(ctrlBtn!!)
+        toolbar.addView(ctrlBtn, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.15f))
         gearBtn = tool(Ico.GEAR) { openSettings() }
 
         suggestionBar = LinearLayout(this).apply {
@@ -213,6 +310,9 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         strip.addView(toggleBtn, lp(dp(40), LinearLayout.LayoutParams.MATCH_PARENT))
         strip.addView(toolbar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         strip.addView(suggestionBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        // Ctrl shortcut bar (visible when Ctrl mode is active)
+        ctrlBar = buildCtrlBar()
+        strip.addView(ctrlBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         // voice status row (visible only while the mic is recording / recognising)
         voiceBar = buildVoiceBar()
         strip.addView(voiceBar, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
@@ -231,10 +331,11 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        cancelVoice()
+        if (!restarting) cancelVoice()
         raw.clear()
         clearBar()
         toolbarOpen = false
+        ctrlActive = false
         typedSinceStart = false
         hidePanel()
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
@@ -279,6 +380,21 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         rebuild()
         currentInputConnection?.let { refreshBar(it) }
         scheduleRefresh()
+        if (voicePending && System.currentTimeMillis() < voicePendingUntil &&
+            !passwordField && Prefs.get(this, "voice") &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        ) {
+            voicePending = false
+            startVoice()
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::kbView.isInitialized) {
+            applyTheme()
+            rebuild()
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -310,7 +426,19 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         for (b in toolbarButtons) tint(b)
         toggleBtn.setTextColor(theme.hint)
         voiceStatus?.setTextColor(theme.text)
+        voiceDoneBtn?.setTextColor(theme.accentText)
+        voiceDoneBtn?.background = rounded(theme.accent, 10)
         voiceClose?.color = theme.hint
+        ctrlBar?.let { bar ->
+            val p = bar.parent as? LinearLayout
+            val idx = p?.indexOfChild(bar) ?: -1
+            if (p != null && idx >= 0) {
+                p.removeViewAt(idx)
+                val newBar = buildCtrlBar()
+                ctrlBar = newBar
+                p.addView(newBar, idx, lp(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            }
+        }
         kbView.refreshTheme()
         syncNavBar()
     }
@@ -406,12 +534,24 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             toggleBtn.visibility = View.GONE
             toolbar.visibility = View.GONE
             suggestionBar.visibility = View.GONE
+            ctrlBar?.visibility = View.GONE
             voiceBar?.visibility = View.VISIBLE
             micBtn?.visibility = View.VISIBLE
             micBtn?.color = voiceRed
             return
         }
         voiceBar?.visibility = View.GONE
+        if (noPanel && ctrlActive) {
+            toggleBtn.visibility = View.GONE
+            toolbar.visibility = View.GONE
+            suggestionBar.visibility = View.GONE
+            ctrlBar?.visibility = View.VISIBLE
+            micBtn?.visibility =
+                if (Prefs.get(this, "voice") && !passwordField) View.VISIBLE else View.GONE
+            micBtn?.color = theme.text
+            return
+        }
+        ctrlBar?.visibility = View.GONE
         micBtn?.color = theme.text
         micBtn?.visibility =
             if (noPanel && Prefs.get(this, "voice") && !passwordField) View.VISIBLE else View.GONE
@@ -492,6 +632,8 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
                 mode = Mode.ALPHA
                 rowAnimPending = true
                 rebuild()
+                updateAutoCap()
+                refreshBar(ic)
             }
             Codes.EMOJI -> showEmoji()
             else -> handleChar(ic, key)
@@ -538,6 +680,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             key.code > Codes.SPACE && key.alt != null -> {
                 finishComposing(ic)
                 ic.commitText(key.alt, 1)
+                refreshBar(ic)
                 afterChar()
                 true
             }
@@ -632,6 +775,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         t.length == 1 && (t[0] in 'a'..'z' || t[0] in 'A'..'Z' || t[0] == '`')
 
     private fun handleChar(ic: InputConnection, key: Key) {
+        if (ctrlActive && handleCtrlChar(ic, key.out)) return
         val t = key.out
         if (bangla && !probhat && !jatiyo && mode == Mode.ALPHA && isPhonetic(t)) {
             raw.append(t)
@@ -914,32 +1058,116 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
 
     // ---- voice typing (Gemini, Bangla + English) ----
 
+    // ---- Ctrl shortcuts ----
+
+    private fun toggleCtrl() {
+        ctrlActive = !ctrlActive
+        toolbarOpen = false
+        updateBarVisibility()
+    }
+
+    private fun buildCtrlBar(): HorizontalScrollView {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        fun pill(label: String, accentPill: Boolean = false, onClick: () -> Unit) {
+            row.addView(
+                TextView(this).apply {
+                    text = label
+                    textSize = 12f
+                    setTypeface(typeface, Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    setTextColor(if (accentPill) theme.accentText else theme.text)
+                    background = rounded(if (accentPill) theme.accent else theme.special, 8)
+                    setPadding(dp(10), 0, dp(10), 0)
+                    setOnClickListener { onClick() }
+                },
+                lp(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT).apply { rightMargin = dp(5) },
+            )
+        }
+        pill("✕", accentPill = true) { ctrlActive = false; updateBarVisibility() }
+        pill("All") { currentInputConnection?.let { execCtrlAction(it, 'a') } }
+        pill("Cut") { currentInputConnection?.let { clipAction(it, Codes.CUT) } }
+        pill("Copy") { currentInputConnection?.let { clipAction(it, Codes.COPY) } }
+        pill("Paste") { currentInputConnection?.let { clipAction(it, Codes.PASTE) } }
+        pill("Undo") { currentInputConnection?.let { execCtrlAction(it, 'z') } }
+        pill("Redo") { currentInputConnection?.let { execCtrlAction(it, 'y') } }
+        pill("←Word") { currentInputConnection?.let { sendCtrlKey(it, KeyEvent.KEYCODE_DPAD_LEFT) } }
+        pill("Word→") { currentInputConnection?.let { sendCtrlKey(it, KeyEvent.KEYCODE_DPAD_RIGHT) } }
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            visibility = View.GONE
+            addView(row)
+        }
+    }
+
+    private fun handleCtrlChar(ic: InputConnection, out: String): Boolean {
+        if (out.length != 1) return false
+        val ch = out[0].lowercaseChar()
+        if (ch !in 'a'..'z') return false
+        execCtrlAction(ic, ch)
+        ctrlActive = false
+        updateBarVisibility()
+        return true
+    }
+
+    private fun execCtrlAction(ic: InputConnection, ch: Char) {
+        finishComposing(ic)
+        when (ch) {
+            'a' -> ic.performContextMenuAction(android.R.id.selectAll)
+            'c' -> clipAction(ic, Codes.COPY)
+            'x' -> clipAction(ic, Codes.CUT)
+            'v' -> clipAction(ic, Codes.PASTE)
+            'z' -> if (!ic.performContextMenuAction(android.R.id.undo)) sendCtrlKey(ic, KeyEvent.KEYCODE_Z)
+            'y' -> if (!ic.performContextMenuAction(android.R.id.redo)) sendCtrlKey(ic, KeyEvent.KEYCODE_Y)
+            else -> sendCtrlKey(ic, KeyEvent.KEYCODE_A + (ch - 'a'))
+        }
+    }
+
+    private fun sendCtrlKey(ic: InputConnection, keyCode: Int) {
+        val now = SystemClock.uptimeMillis()
+        val meta = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        ic.sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, meta))
+        ic.sendKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0, meta))
+    }
+
     /** Builds the strip row shown while the mic is recording or the audio is being recognised. */
     private fun buildVoiceBar(): LinearLayout {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        voiceDot = IconView(this, Ico.MIC).apply {
-            color = voiceRed
-            scale = 0.6f
-        }
-        bar.addView(voiceDot, lp(dp(36), LinearLayout.LayoutParams.MATCH_PARENT))
+        voiceWave = VoiceWaveView(this)
+        bar.addView(voiceWave, lp(dp(36), LinearLayout.LayoutParams.MATCH_PARENT))
         voiceStatus = TextView(this).apply {
-            textSize = 14f
+            textSize = 13f
             maxLines = 1
             setTextColor(theme.text)
-            setPadding(dp(10), 0, 0, 0)
+            setPadding(dp(6), 0, dp(6), 0)
             ellipsize = TextUtils.TruncateAt.END
         }
         bar.addView(voiceStatus, lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        voiceDoneBtn = TextView(this).apply {
+            text = "Done"
+            textSize = 12f
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setTextColor(theme.accentText)
+            background = rounded(theme.accent, 10)
+            setPadding(dp(12), 0, dp(12), 0)
+            setOnClickListener { recorder?.stop() }
+        }
+        bar.addView(voiceDoneBtn, lp(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT).apply { rightMargin = dp(4) })
         voiceClose = IconView(this, Ico.CLOSE).apply {
             color = theme.hint
             scale = 0.5f
-            setOnClickListener { cancelVoice() }
+            setOnClickListener { voicePending = false; cancelVoice() }
         }
-        bar.addView(voiceClose, lp(dp(38), LinearLayout.LayoutParams.MATCH_PARENT))
+        bar.addView(voiceClose, lp(dp(34), LinearLayout.LayoutParams.MATCH_PARENT))
         return bar
     }
 
@@ -959,11 +1187,20 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
 
     /** Called by MicPermissionActivity once the system permission dialog has been answered. */
     fun onMicPermissionGranted() {
-        if (voicePending && voiceState == VoiceState.IDLE && isInputViewShown) {
-            startVoice()
+        if (voicePending && System.currentTimeMillis() < voicePendingUntil && voiceState == VoiceState.IDLE) {
+            if (isInputViewShown) {
+                voicePending = false
+                startVoice()
+            }
+            // otherwise keep voicePending = true so onStartInputView resumes once the IME regains focus
         } else {
             voicePending = false
         }
+    }
+
+    fun onMicPermissionDenied() {
+        voicePending = false
+        voicePendingUntil = 0L
     }
 
     private fun startVoice() {
@@ -982,6 +1219,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             voicePending = true
+            voicePendingUntil = System.currentTimeMillis() + 30_000L
             try {
                 startActivity(
                     Intent(this, MicPermissionActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -993,12 +1231,20 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             return
         }
         if (panel != null) hidePanel()
+        ctrlActive = false
         currentInputConnection?.let { finishComposing(it) }
+        if (Prefs.get(this, "voice_haptic")) {
+            kbView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        }
         voiceGen++
         val gen = voiceGen
         voiceStart = System.currentTimeMillis()
         setVoiceState(VoiceState.REC)
-        val rec = VoiceRecorder { wav, reason -> ui.post { if (gen == voiceGen) onRecordDone(gen, wav, reason) } }
+        val rec = VoiceRecorder(
+            silenceMs = Prefs.voiceSilenceMs(this),
+            onLevel = { lvl -> ui.post { if (gen == voiceGen && voiceState == VoiceState.REC) voiceWave?.setLevel(lvl) } },
+            onStopped = { wav, reason -> ui.post { if (gen == voiceGen) onRecordDone(gen, wav, reason) } },
+        )
         recorder = rec
         rec.start()
     }
@@ -1010,9 +1256,14 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             toast(reason ?: "No speech captured")
             return
         }
+        if (Prefs.get(this, "voice_haptic")) {
+            kbView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
         setVoiceState(VoiceState.BUSY)
         val key = Prefs.getString(this, "gemini_key").trim()
         val model = Prefs.getString(this, "gemini_model").trim()
+        val langMode = Prefs.voiceLang(this)
+        val autoPunct = Prefs.get(this, "voice_punct")
         // models the user fetched from Google earlier: tried (in order) if the chosen one is rejected
         val fallbacks = Prefs.getString(this, "models_cache")
             .split('\n')
@@ -1021,7 +1272,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             .take(3)
         Thread {
             val res = try {
-                GeminiVoice.transcribe(key, model, wav, fallbacks)
+                GeminiVoice.transcribe(key, model, wav, fallbacks, langMode, autoPunct)
             } catch (e: Exception) {
                 VoiceResult.Error("Voice failed: ${e.message ?: "unknown"}")
             }
@@ -1045,19 +1296,26 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         }
     }
 
-    /** Commits the recognised text at the cursor, adding one space when the field already has text. */
+    /** Commits the recognised text directly into the active input field, just like keyboard taps. */
     private fun commitVoice(t: String) {
         val ic = currentInputConnection ?: return
+        ic.beginBatchEdit()
+        ic.finishComposingText()
         val before = ic.getTextBeforeCursor(1, 0)?.toString() ?: ""
-        val join = if (before.isEmpty() || before[0].isWhitespace() || before[0] == '।') "" else " "
+        val noSpaceAfter = before.isEmpty() || before[0].isWhitespace() || before[0] in "।([{\"'“/-"
+        val join = if (noSpaceAfter) "" else " "
         ic.commitText(join + t, 1)
+        ic.endBatchEdit()
+        if (Prefs.get(this, "voice_haptic")) {
+            kbView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        }
         typedSinceStart = true
+        updateAutoCap()
         refreshBar(ic)
     }
 
     private fun cancelVoice() {
         voiceGen++
-        voicePending = false
         recorder?.cancel()
         recorder = null
         setVoiceState(VoiceState.IDLE)
@@ -1072,11 +1330,15 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         voiceState = s
         ui.removeCallbacks(blinkRun)
         if (s == VoiceState.REC) {
-            voiceDot?.alpha = 1f
-            voiceStatus?.text = "Listening… speak now"
-            ui.postDelayed(blinkRun, 500)
+            voiceWave?.setBusy(false)
+            voiceDoneBtn?.visibility = View.VISIBLE
+            voiceStatus?.text = "Listening… 0s"
+            ui.postDelayed(blinkRun, 400)
         } else if (s == VoiceState.BUSY) {
+            voiceWave?.setBusy(true)
+            voiceDoneBtn?.visibility = View.GONE
             voiceStatus?.text = "Recognising…"
+            ui.postDelayed(blinkRun, 90)
         }
         updateBarVisibility()
     }
@@ -1098,6 +1360,8 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         root.addView(kbView, lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         panel = null
         clipList = null
+        clipCountView = null
+        clipFilterBtn = null
         updateBarVisibility()
     }
 
@@ -1242,9 +1506,11 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
                 return
             }
             for (e in items) {
+                val wide = e.text.length > 4
+                val span = if (wide) minOf(3, cols) else 1
                 val tv = TextView(this).apply {
                     text = e.text
-                    textSize = 26f
+                    textSize = if (wide) 14f else 26f
                     gravity = Gravity.CENTER
                     setOnClickListener {
                         toneBar.visibility = View.GONE
@@ -1255,8 +1521,11 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
                         true
                     }
                 }
-                grid.addView(tv, GridLayout.LayoutParams().apply {
-                    width = cellW
+                grid.addView(tv, GridLayout.LayoutParams(
+                    GridLayout.spec(GridLayout.UNDEFINED),
+                    GridLayout.spec(GridLayout.UNDEFINED, span),
+                ).apply {
+                    width = cellW * span
                     height = (cellW * 0.9f).toInt()
                 })
             }
@@ -1431,6 +1700,9 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
 
     // ---- clipboard panel ----
 
+    private var clipCountView: TextView? = null
+    private var clipFilterBtn: TextView? = null
+
     private fun showClipboard() {
         if (panel != null) return
         currentInputConnection?.let { finishComposing(it) }
@@ -1446,23 +1718,42 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(4), dp(8), dp(4))
+            setPadding(dp(12), dp(6), dp(8), dp(6))
         }
-        header.addView(
+        val titleCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        titleCol.addView(
             TextView(this).apply {
                 text = "Clipboard"
                 textSize = 16f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(theme.text)
             },
-            lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
+        clipCountView = TextView(this).apply {
+            textSize = 11f
+            setTextColor(theme.hint)
+        }
+        titleCol.addView(clipCountView)
+        header.addView(titleCol, lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        clipFilterBtn = panelButton(if (clipPinnedOnly) "Pinned" else "All") {
+            clipPinnedOnly = !clipPinnedOnly
+            refreshClipList()
+        }.apply {
+            textSize = 12f
+            setPadding(dp(12), 0, dp(12), 0)
+        }
+        header.addView(clipFilterBtn, lp(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)).apply { rightMargin = dp(6) })
+
         header.addView(
             panelButton("Clear") {
                 ClipHistory.clearUnpinned(this)
                 refreshClipList()
-            }.apply { setPadding(dp(14), 0, dp(14), 0) },
-            lp(LinearLayout.LayoutParams.WRAP_CONTENT, dp(32)),
+            }.apply {
+                textSize = 12f
+                setPadding(dp(12), 0, dp(12), 0)
+            },
+            lp(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)),
         )
         box.addView(header, lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
@@ -1477,21 +1768,42 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         return box
     }
 
+    private fun relTime(ts: Long): String {
+        if (ts <= 0L) return ""
+        val diff = (System.currentTimeMillis() - ts).coerceAtLeast(0L) / 1000L
+        return when {
+            diff < 60 -> "Just now"
+            diff < 3600 -> "${diff / 60}m ago"
+            diff < 86400 -> "${diff / 3600}h ago"
+            else -> "${diff / 86400}d ago"
+        }
+    }
+
     private fun refreshClipList() {
         val list = clipList ?: return
         list.removeAllViews()
-        val items = ClipHistory.ordered(this)
+        val all = ClipHistory.ordered(this)
+        val items = if (clipPinnedOnly) all.filter { it.pinned } else all
+        clipCountView?.text = "${all.size} saved · ${all.count { it.pinned }} pinned"
+        clipFilterBtn?.apply {
+            text = if (clipPinnedOnly) "Pinned" else "All"
+            background = rounded(if (clipPinnedOnly) theme.accent else theme.special, 10)
+            setTextColor(if (clipPinnedOnly) theme.accentText else theme.text)
+        }
         if (items.isEmpty()) {
             list.addView(
                 TextView(this).apply {
-                    text = if (Prefs.get(this@OpenRidmikService, "clipboard")) {
-                        "Nothing copied yet. Copy some text and it will show up here.\nTip: tap the pin to keep an item."
-                    } else {
-                        "Clipboard history is turned off. You can turn it on in OpenRidmik settings."
+                    text = when {
+                        !Prefs.get(this@OpenRidmikService, "clipboard") ->
+                            "Clipboard history is turned off. You can turn it on in Ridmik Pro settings."
+                        clipPinnedOnly ->
+                            "No pinned items yet. Tap the pin icon on any clip to keep it."
+                        else ->
+                            "Nothing copied yet. Copy some text and it will show up here.\nTip: tap a card to paste, or pin to keep it."
                     }
                     textSize = 14f
                     setTextColor(theme.hint)
-                    setPadding(dp(8), dp(12), dp(8), dp(12))
+                    setPadding(dp(8), dp(14), dp(8), dp(14))
                 },
                 lp(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT),
             )
@@ -1504,35 +1816,74 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = rounded(theme.key, 10)
-            setPadding(dp(12), dp(2), dp(2), dp(2))
+            background = GradientDrawable().apply {
+                setColor(theme.key)
+                cornerRadius = dp(12).toFloat()
+                if (item.pinned) setStroke(dp(1), theme.accent)
+            }
+            setPadding(dp(12), dp(4), dp(2), dp(4))
         }
-        row.addView(
+        val textCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), dp(4), dp(4))
+            setOnClickListener {
+                currentInputConnection?.let { ic ->
+                    finishComposing(ic)
+                    ic.commitText(item.text, 1)
+                    typedSinceStart = true
+                    refreshBar(ic)
+                }
+            }
+        }
+        textCol.addView(
             TextView(this).apply {
                 text = item.text
                 textSize = 14f
                 maxLines = 3
                 ellipsize = TextUtils.TruncateAt.END
                 setTextColor(theme.text)
-                setPadding(0, dp(8), dp(4), dp(8))
+            },
+        )
+        val metaParts = ArrayList<String>()
+        if (item.pinned) metaParts.add("PINNED")
+        val rt = relTime(item.ts)
+        if (rt.isNotEmpty()) metaParts.add(rt)
+        metaParts.add("${item.text.length} chars")
+        textCol.addView(
+            TextView(this).apply {
+                text = metaParts.joinToString(" · ")
+                textSize = 11f
+                setTextColor(if (item.pinned) theme.accent else theme.hint)
+                setPadding(0, dp(2), 0, 0)
+            },
+        )
+        row.addView(textCol, lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        row.addView(
+            IconView(this, Ico.COPY).apply {
+                color = theme.hint
+                scale = 0.48f
                 setOnClickListener {
-                    currentInputConnection?.commitText(item.text, 1)
+                    try {
+                        clipboard?.setPrimaryClip(ClipData.newPlainText("text", item.text))
+                        toast("Copied to clipboard")
+                    } catch (_: Exception) {}
                 }
             },
-            lp(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            lp(dp(36), dp(38)),
         )
         row.addView(
             IconView(this, Ico.PIN).apply {
-                color = theme.text
+                color = if (item.pinned) theme.accent else theme.text
                 filled = item.pinned
-                alpha = if (item.pinned) 1f else 0.4f
+                alpha = if (item.pinned) 1f else 0.45f
                 scale = 0.5f
                 setOnClickListener {
                     ClipHistory.togglePin(this@OpenRidmikService, item.text)
                     refreshClipList()
                 }
             },
-            lp(dp(40), dp(40)),
+            lp(dp(36), dp(38)),
         )
         row.addView(
             IconView(this, Ico.CLOSE).apply {
@@ -1543,7 +1894,7 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
                     refreshClipList()
                 }
             },
-            lp(dp(40), dp(40)),
+            lp(dp(36), dp(38)),
         )
         return row
     }

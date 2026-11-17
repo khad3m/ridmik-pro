@@ -123,16 +123,32 @@ class AvroEngine(rulesText: String) {
  * Bundled dictionary for one language: words ordered by frequency (most common first) plus a small table of
  * common word pairs and sentence starters, so suggestions work from the very first keystroke after install.
  */
-class Suggester(text: String, seed: String = "") {
-    private val words = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+class Suggester(wordsStream: java.io.InputStream, seedStream: java.io.InputStream? = null) {
+    private val words: ArrayList<String>
     private val follow = HashMap<String, List<String>>()
     private var starters: List<String> = emptyList()
 
     init {
-        for (line in seed.lines()) {
-            val parts = line.trim().split(' ').filter { it.isNotEmpty() }
-            if (parts.size < 2) continue
-            if (parts[0] == "^") starters = parts.drop(1) else follow[parts[0]] = parts.drop(1)
+        val list = ArrayList<String>(4096)
+        wordsStream.bufferedReader().use { br ->
+            var line = br.readLine()
+            while (line != null) {
+                val t = line.trim()
+                if (t.isNotEmpty()) list.add(t)
+                line = br.readLine()
+            }
+        }
+        list.trimToSize()
+        words = list
+        seedStream?.bufferedReader()?.use { br ->
+            var line = br.readLine()
+            while (line != null) {
+                val parts = line.trim().split(' ').filter { it.isNotEmpty() }
+                if (parts.size >= 2) {
+                    if (parts[0] == "^") starters = parts.drop(1) else follow[parts[0]] = parts.drop(1)
+                }
+                line = br.readLine()
+            }
         }
     }
 

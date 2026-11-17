@@ -24,27 +24,48 @@ sealed class VoiceResult {
 
 object GeminiVoice {
 
-    private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
+    private const val BASE = "https://generativelanguage.googleapis.com/v1beta/"
 
-    private const val PROMPT =
-        "You are a speech-to-text engine. Transcribe the spoken audio exactly as said. " +
-        "The speech may be in Bangla (Bengali), English, or a mix of both: keep every word in the " +
-        "language it was spoken in and NEVER translate. " +
-        "Add natural punctuation, spacing and sentence capitalisation. " +
-        "Return ONLY the transcription as plain text: no explanations, no quotes, no labels. " +
-        "If the audio contains no speech, return an empty string."
+    private fun buildPrompt(langMode: String, autoPunct: Boolean): String {
+        val langRule = when (langMode) {
+            "bn" -> "The speech is in Bangla (Bengali). Transcribe in Bangla script (বাংলা)."
+            "en" -> "The speech is in English. Transcribe in English."
+            else -> "The speech may be in Bangla (Bengali), English, or a mix of both: keep every word in the language it was spoken in and NEVER translate."
+        }
+        val punctRule = if (autoPunct) {
+            "Add natural punctuation, spacing and sentence capitalisation."
+        } else {
+            "Keep spacing natural without adding extra punctuation."
+        }
+        return "You are a speech-to-text engine. Transcribe the spoken audio exactly as said. " +
+            "$langRule $punctRule " +
+            "Return ONLY the transcription as plain text: no explanations, no quotes, no labels. " +
+            "If the audio contains no speech, return an empty string."
+    }
 
     /**
      * Transcribes [wav] (WAV bytes) with the user's Gemini key. [fallbacks] are other models the
      * user fetched from Google earlier; they are tried only when the chosen model itself is
      * rejected. Key / network / quota problems are returned as-is.
      */
-    fun transcribe(apiKey: String, model: String, wav: ByteArray, fallbacks: List<String> = emptyList()): VoiceResult {
-        val chain = mutableListOf(model)
-        for (m in fallbacks) if (m != model && m !in chain) chain.add(m)
+    fun transcribe(
+        apiKey: String,
+        model: String,
+        wav: ByteArray,
+        fallbacks: List<String> = emptyList(),
+        langMode: String = "auto",
+        autoPunct: Boolean = true,
+    ): VoiceResult {
+        val prompt = buildPrompt(langMode, autoPunct)
+        val primary = model.trim().removePrefix("models/")
+        val chain = mutableListOf(primary)
+        for (f in fallbacks) {
+            val fm = f.trim().removePrefix("models/")
+            if (fm.isNotEmpty() && fm != primary && fm !in chain) chain.add(fm)
+        }
         var last = "Voice input failed"
         for (m in chain) {
-            when (val r = post(apiKey, m, audioBody(wav, m))) {
+            when (val r = post(apiKey, m, audioBody(wav, m, prompt))) {
                 is VoiceResult.Text -> return r
                 is VoiceResult.Error -> if (r.modelProblem) last = r.message else return r
             }
@@ -59,7 +80,7 @@ object GeminiVoice {
     }
 
     /** Speech-generation / non-input models that make no sense as a transcription target. */
-    private val NON_INPUT = listOf("tts", "imagen", "image-gen", "veo", "embed", "aqa", "gemma", "learnlm", "live")
+    private val NON_INPUT = listOf("tts", "imagen", "image-gen", "-image", "veo", "embed", "aqa", "gemma", "learnlm", "live", "robotics", "computer-use")
 
     /** GET /models: only models that accept generateContent, newest catalogue straight from Google. */
     fun fetchModels(apiKey: String): ModelList {
@@ -114,20 +135,22 @@ object GeminiVoice {
 
     /** Minimal text-only check: null when the key + model work, otherwise the exact reason. */
     fun ping(apiKey: String, model: String): String? {
-        // no generationConfig at all - every generateContent model accepts a bare contents request
+        val cleanModel = model.trim().removePrefix("models/")
+        if (cleanModel.isEmpty()) return "Model name is empty"
         val body = JSONObject()
             .put(
                 "contents",
                 JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", "Reply with exactly: OK")))),
             )
-        return when (val r = post(apiKey, model, body)) {
+            .put("generationConfig", generationConfig(cleanModel, 16))
+        return when (val r = post(apiKey, cleanModel, body)) {
             is VoiceResult.Text -> null
             is VoiceResult.Error -> r.message
         }
     }
 
     /** Audio goes as two parts (prompt + inline WAV); a Part carries only one field, so they must not be merged. */
-    private fun audioBody(wav: ByteArray, model: String): JSONObject {
+    private fun audioBody(wav: ByteArray, model: String, prompt: String): JSONObject {
         val b64 = Base64.encodeToString(wav, Base64.NO_WRAP)
         return JSONObject()
             .put(
@@ -136,7 +159,7 @@ object GeminiVoice {
                     JSONObject().put(
                         "parts",
                         JSONArray()
-                            .put(JSONObject().put("text", PROMPT))
+                            .put(JSONObject().put("text", prompt))
                             .put(
                                 JSONObject().put(
                                     "inline_data",
@@ -174,7 +197,8 @@ object GeminiVoice {
     }
 
     private fun postOnce(apiKey: String, model: String, body: JSONObject): VoiceResult {
-        val conn = URL(BASE + model + ":generateContent").openConnection() as HttpURLConnection
+        val cleanModel = model.trim().removePrefix("models/")
+        val conn = URL("${BASE}models/$cleanModel:generateContent").openConnection() as HttpURLConnection
         return try {
             conn.connectTimeout = 12000
             conn.readTimeout = 40000
@@ -249,7 +273,9 @@ object GeminiVoice {
             val parts = cands.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
             if (parts != null) {
                 for (i in 0 until parts.length()) {
-                    sb.append(parts.getJSONObject(i).optString("text"))
+                    val part = parts.getJSONObject(i)
+                    if (part.optBoolean("thought", false)) continue
+                    sb.append(part.optString("text"))
                 }
             }
             VoiceResult.Text(clean(sb.toString()))
@@ -260,7 +286,10 @@ object GeminiVoice {
 
     private fun clean(t: String): String {
         var s = t.trim()
-        if (s.startsWith("```")) s = s.removePrefix("```").trim().removePrefix("json").trim()
+        if (s.startsWith("```")) {
+            val nl = s.indexOf('\n')
+            s = if (nl >= 0) s.substring(nl + 1).trim() else s.removePrefix("```").trim()
+        }
         if (s.endsWith("```")) s = s.removeSuffix("```").trim()
         if (s.length >= 2 && s.first() == '"' && s.last() == '"') s = s.substring(1, s.length - 1)
         return s.trim()
@@ -290,7 +319,11 @@ object Wav {
  * needs exactly one tap. [onStopped] runs on the recorder thread with the WAV
  * bytes, or null + a short reason when nothing usable was captured.
  */
-class VoiceRecorder(private val onStopped: (wav: ByteArray?, reason: String?) -> Unit) {
+class VoiceRecorder(
+    private val silenceMs: Int = SILENCE_MS,
+    private val onLevel: ((Float) -> Unit)? = null,
+    private val onStopped: (wav: ByteArray?, reason: String?) -> Unit,
+) {
 
     private var record: AudioRecord? = null
     private var thread: Thread? = null
@@ -319,10 +352,16 @@ class VoiceRecorder(private val onStopped: (wav: ByteArray?, reason: String?) ->
             onStopped(null, "Microphone unavailable")
             return
         }
+        try {
+            rec.startRecording()
+        } catch (e: Exception) {
+            try { rec.release() } catch (_: Exception) {}
+            onStopped(null, "Microphone unavailable (another app may be using it)")
+            return
+        }
         record = rec
         stopRequested.set(false)
         cancelled.set(false)
-        rec.startRecording()
         thread = Thread({
             var pcm: ByteArray? = null
             var err: String? = null
@@ -352,13 +391,14 @@ class VoiceRecorder(private val onStopped: (wav: ByteArray?, reason: String?) ->
 
     private fun loop(rec: AudioRecord): ByteArray {
         val buf = ShortArray(1600) // 100 ms frames at 16 kHz
-        val out = ByteArrayOutputStream()
+        val out = ByteArrayOutputStream(32768)
         var speech = false
         var quietMs = 0
         var totalMs = 0
         while (!stopRequested.get() && totalMs < MAX_MS) {
             val n = rec.read(buf, 0, buf.size)
-            if (n <= 0) {
+            if (n < 0) break
+            if (n == 0) {
                 Thread.sleep(8)
                 continue
             }
@@ -368,21 +408,25 @@ class VoiceRecorder(private val onStopped: (wav: ByteArray?, reason: String?) ->
                 sum += s * s
             }
             val rms = Math.sqrt(sum / n).toFloat()
+            onLevel?.invoke((rms / 3500f).coerceIn(0f, 1f))
             for (i in 0 until n) {
                 val v = buf[i].toInt()
                 out.write(v and 0xFF)
                 out.write(v shr 8 and 0xFF)
             }
-            totalMs += 100
+            val frameMs = maxOf(1, (n * 1000) / SAMPLE_RATE)
+            totalMs += frameMs
             if (rms > SILENCE_RMS) {
                 speech = true
                 quietMs = 0
             } else if (speech) {
-                quietMs += 100
-                if (quietMs >= SILENCE_MS) break
+                quietMs += frameMs
+                if (quietMs >= silenceMs) break
             }
         }
-        return out.toByteArray()
+        val bytes = out.toByteArray()
+        out.reset()
+        return bytes
     }
 
     companion object {

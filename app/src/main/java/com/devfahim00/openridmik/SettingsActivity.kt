@@ -89,7 +89,7 @@ class SettingsActivity : Activity() {
         super.onPause()
         // keep the Gemini key and model even when the user leaves without pressing Save
         if (::apiKeyEdit.isInitialized) Prefs.setString(this, "gemini_key", apiKeyEdit.text.toString().trim())
-        if (::modelEdit.isInitialized) Prefs.setString(this, "gemini_model", modelEdit.text.toString().trim())
+        if (::modelEdit.isInitialized) Prefs.setString(this, "gemini_model", modelEdit.text.toString().trim().removePrefix("models/"))
     }
     private val d by lazy { resources.displayMetrics.density }
 
@@ -165,7 +165,11 @@ class SettingsActivity : Activity() {
         fun card(): LinearLayout {
             val c = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                background = rounded(surface, 16)
+                background = GradientDrawable().apply {
+                    setColor(surface)
+                    cornerRadius = dp(16).toFloat()
+                    setStroke(1, line)
+                }
             }
             root.addView(c, lp())
             return c
@@ -204,7 +208,10 @@ class SettingsActivity : Activity() {
         fun toggleRow(c: LinearLayout, first: Boolean, title: String, key: String) {
             val sw = Switch(this).apply {
                 isChecked = Prefs.get(this@SettingsActivity, key)
-                setOnCheckedChangeListener { _, on -> Prefs.set(this@SettingsActivity, key, on) }
+                setOnCheckedChangeListener { _, on ->
+                    Prefs.set(this@SettingsActivity, key, on)
+                    OpenRidmikService.live?.reloadFromPrefs()
+                }
             }
             row(c, first, title, sw) { sw.toggle() }
         }
@@ -212,12 +219,29 @@ class SettingsActivity : Activity() {
         // ---- header ----
         root.addView(
             LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.BOTTOM
-                setPadding(dp(8), 0, dp(8), 0)
-                addView(text("Ridmik Pro", 30f, fg, bold = true))
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(8), 0, dp(8), dp(4))
                 addView(
-                    text("v${currentVersion()}", 13f, muted).apply { setPadding(dp(10), 0, 0, dp(5)) },
+                    LinearLayout(this@SettingsActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        addView(text("Ridmik Pro", 30f, fg, bold = true))
+                        addView(
+                            text("v${currentVersion()}", 11f, accent, bold = true).apply {
+                                background = rounded(line, 8)
+                                setPadding(dp(8), dp(3), dp(8), dp(3))
+                            },
+                            LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                            ).apply { leftMargin = dp(10) },
+                        )
+                    },
+                )
+                addView(
+                    text("Bangla + English · Gemini Voice · Privacy-first", 13f, muted).apply {
+                        setPadding(0, dp(4), 0, 0)
+                    },
                 )
             },
             lp(),
@@ -226,7 +250,7 @@ class SettingsActivity : Activity() {
         // ---- keyboard ----
         section("Keyboard")
         val setup = card()
-        row(setup, true, "Enable OpenRidmik", chevron()) {
+        row(setup, true, "Enable Ridmik Pro", chevron()) {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
         }
         row(setup, false, "Switch keyboard", chevron()) {
@@ -252,6 +276,7 @@ class SettingsActivity : Activity() {
                         setOnClickListener {
                             Prefs.setLayout(this@SettingsActivity, id)
                             refreshSeg()
+                            OpenRidmikService.live?.reloadFromPrefs()
                         }
                     },
                     LinearLayout.LayoutParams(0, dp(42), 1f),
@@ -301,6 +326,7 @@ class SettingsActivity : Activity() {
                 Prefs.setCustomColors(this, v[0]!!, v[1]!!, v[2]!!, v[3]!!)
                 Prefs.setTheme(this, "custom")
                 refreshSwatches(fg, muted)
+                OpenRidmikService.live?.reloadFromPrefs()
                 Toast.makeText(this, "Custom theme applied", Toast.LENGTH_SHORT).show()
             }
         }.setTextColor(accent)
@@ -359,7 +385,10 @@ class SettingsActivity : Activity() {
                     override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
                         val pct = Prefs.HEIGHT_MIN + p
                         value.text = "$pct%"
-                        if (fromUser) Prefs.setHeightPercent(this@SettingsActivity, landscape, pct)
+                        if (fromUser) {
+                            Prefs.setHeightPercent(this@SettingsActivity, landscape, pct)
+                            OpenRidmikService.live?.reloadFromPrefs()
+                        }
                     }
                     override fun onStartTrackingTouch(sb: SeekBar) {}
                     override fun onStopTrackingTouch(sb: SeekBar) {}
@@ -381,6 +410,7 @@ class SettingsActivity : Activity() {
             Prefs.setHeightPercent(this, false, 100)
             Prefs.setHeightPercent(this, true, 100)
             for (b in heightBars) b.progress = 100 - Prefs.HEIGHT_MIN
+            OpenRidmikService.live?.reloadFromPrefs()
         }
         root.addView(
             text("Makes the keys taller or shorter. Applies the next time the keyboard opens.", 12f, muted),
@@ -500,22 +530,52 @@ class SettingsActivity : Activity() {
         vcard.addView(vinner)
 
         vinner.addView(vlabel("Gemini API key"))
-        apiKeyEdit = fieldBox("paste your free Gemini API key (AIza…)", Prefs.getString(this, "gemini_key"))
-        vinner.addView(apiKeyEdit)
+        apiKeyEdit = fieldBox("paste your free Gemini API key (AIza…)", Prefs.getString(this, "gemini_key")).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        var keyShown = false
+        val keyToggle = text("Show", 12f, accent, bold = true).apply {
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setOnClickListener {
+                keyShown = !keyShown
+                val sel = apiKeyEdit.selectionStart.coerceAtLeast(0)
+                apiKeyEdit.inputType = if (keyShown) {
+                    InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                } else {
+                    InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                }
+                apiKeyEdit.setSelection(sel.coerceAtMost(apiKeyEdit.text.length))
+                text = if (keyShown) "Hide" else "Show"
+            }
+        }
+        vinner.addView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(apiKeyEdit, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(keyToggle)
+            },
+        )
 
         vinner.addView(vlabel("Model"))
         modelEdit = fieldBox("fetch the list, or type e.g. gemini-2.5-flash", Prefs.getString(this, "gemini_model"))
         vinner.addView(modelEdit)
 
-        val fetchBtn = pillButton("⭳  Fetch model list from Google", line, accent)
+        val fetchBtn = pillButton("↓  Fetch model list from Google", line, accent, bold = true)
         vinner.addView(fetchBtn, lp(10))
 
         val saveBtn = pillButton("Save & Test", accent, onAccent, bold = true)
         vinner.addView(saveBtn, lp(10))
 
-        val voiceStatus = text("", 13f, muted).apply {
+        val savedModel = Prefs.getString(this, "gemini_model").trim()
+        val savedKey = Prefs.getString(this, "gemini_key").trim()
+        val voiceStatus = text(
+            if (savedKey.isNotEmpty() && savedModel.isNotEmpty()) "Configured · $savedModel" else "",
+            13f,
+            if (savedKey.isNotEmpty() && savedModel.isNotEmpty()) accent else muted,
+        ).apply {
             gravity = Gravity.CENTER
-            setPadding(dp(2), dp(10), dp(2), 0)
+            setPadding(dp(10), dp(10), dp(10), dp(4))
         }
         vinner.addView(voiceStatus)
 
@@ -523,7 +583,8 @@ class SettingsActivity : Activity() {
 
         fun saveAndTest() {
             val key = apiKeyEdit.text.toString().trim()
-            val model = modelEdit.text.toString().trim()
+            val model = modelEdit.text.toString().trim().removePrefix("models/")
+            if (model != modelEdit.text.toString()) modelEdit.setText(model)
             if (key.isEmpty()) {
                 Toast.makeText(this@SettingsActivity, "Paste your Gemini API key first", Toast.LENGTH_SHORT).show()
                 return
@@ -534,13 +595,20 @@ class SettingsActivity : Activity() {
             }
             Prefs.setString(this@SettingsActivity, "gemini_key", key)
             Prefs.setString(this@SettingsActivity, "gemini_model", model)
-            voiceStatus.text = "Testing the key…"
+            saveBtn.isEnabled = false
+            fetchBtn.isEnabled = false
+            saveBtn.text = "Testing…"
+            voiceStatus.text = "Testing API key & $model…"
             voiceStatus.setTextColor(muted)
             Thread {
                 // step 1: the key alone - GET /models cannot fail for model reasons
                 val cat = GeminiVoice.fetchModels(key)
                 if (cat is GeminiVoice.ModelList.Fail) {
                     runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        saveBtn.isEnabled = true
+                        fetchBtn.isEnabled = true
+                        saveBtn.text = "Save & Test"
                         voiceStatus.text = cat.message
                         voiceStatus.setTextColor(errColor)
                     }
@@ -554,11 +622,15 @@ class SettingsActivity : Activity() {
                 // step 2: the chosen model, with a minimal request
                 val err = GeminiVoice.ping(key, model)
                 runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    saveBtn.isEnabled = true
+                    fetchBtn.isEnabled = true
+                    saveBtn.text = "Save & Test"
                     if (err == null) {
                         voiceStatus.text = "Saved ✓  ·  $model is working"
                         voiceStatus.setTextColor(accent)
                     } else {
-                        voiceStatus.text = "Key is OK ✓ - but $model failed: $err"
+                        voiceStatus.text = "Key is OK ✓ — but $model failed: $err"
                         voiceStatus.setTextColor(errColor)
                     }
                 }
@@ -574,11 +646,14 @@ class SettingsActivity : Activity() {
             Prefs.setString(this@SettingsActivity, "gemini_key", key)
             fetchBtn.text = "Fetching models…"
             fetchBtn.isEnabled = false
+            saveBtn.isEnabled = false
             Thread {
                 val res = GeminiVoice.fetchModels(key)
                 runOnUiThread {
-                    fetchBtn.text = "⭳  Fetch model list from Google"
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    fetchBtn.text = "↓  Fetch model list from Google"
                     fetchBtn.isEnabled = true
+                    saveBtn.isEnabled = true
                     when (res) {
                         is GeminiVoice.ModelList.Ok -> {
                             if (res.models.isEmpty()) {
@@ -608,10 +683,43 @@ class SettingsActivity : Activity() {
         fetchBtn.setOnClickListener { fetchModels() }
         saveBtn.setOnClickListener { saveAndTest() }
 
+        fun segRow(labelTitle: String, prefKey: String, defVal: String, options: List<Pair<String, String>>) {
+            vinner.addView(vlabel(labelTitle))
+            val bar = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = rounded(bg, 12)
+                setPadding(dp(3), dp(3), dp(3), dp(3))
+            }
+            fun redraw() {
+                bar.removeAllViews()
+                val curVal = Prefs.getString(this@SettingsActivity, prefKey, defVal).ifEmpty { defVal }
+                for ((id, name) in options) {
+                    val on = curVal == id
+                    bar.addView(
+                        text(name, 12f, if (on) onAccent else fg, bold = on).apply {
+                            gravity = Gravity.CENTER
+                            background = if (on) rounded(accent, 9) else null
+                            setOnClickListener {
+                                Prefs.setString(this@SettingsActivity, prefKey, id)
+                                redraw()
+                            }
+                        },
+                        LinearLayout.LayoutParams(0, dp(36), 1f),
+                    )
+                }
+            }
+            redraw()
+            vinner.addView(bar)
+        }
+        segRow("Voice language", "voice_lang", "auto", listOf("auto" to "Auto (বাং+En)", "bn" to "বাংলা", "en" to "English"))
+        segRow("Auto-stop silence", "voice_silence", "normal", listOf("fast" to "Fast 1.2s", "normal" to "Normal 1.8s", "relaxed" to "Relaxed 2.8s"))
+
         row(vcard, true, "Get a free API key (aistudio.google.com)", chevron()) {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
         }
         toggleRow(vcard, false, "Show mic button", "voice")
+        toggleRow(vcard, false, "Auto-punctuation & capitalisation", "voice_punct")
+        toggleRow(vcard, false, "Voice haptic feedback", "voice_haptic")
         root.addView(
             text(
                 "Tap the mic at the top-right of the keyboard, speak in Bangla or English, then tap again (or just pause) " +
@@ -694,6 +802,7 @@ class SettingsActivity : Activity() {
             cell.setOnClickListener {
                 Prefs.setTheme(this, id)
                 refreshSwatches(fg, muted)
+                OpenRidmikService.live?.reloadFromPrefs()
             }
             swatchRow.addView(cell)
         }

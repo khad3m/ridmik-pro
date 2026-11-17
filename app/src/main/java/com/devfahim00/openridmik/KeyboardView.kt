@@ -312,8 +312,12 @@ class KeyboardView(context: Context) : View(context) {
         val w = minOf(width - dp(16f), maxOf(rc.width() * 0.8f, dp(170f)))
         val h = rowH * 1.1f
         val left = (rc.centerX() - w / 2f).coerceIn(dp(8f), width - w - dp(8f))
-        val bottom = rc.top - dp(2f)
-        val top = maxOf(bottom - h, dp(1f))
+        var bottom = rc.top - dp(2f)
+        var top = bottom - h
+        if (top < dp(1f)) {
+            top = dp(1f)
+            bottom = maxOf(bottom, top + minOf(h, rowH * 0.9f))
+        }
         val box = RectF(left, top, left + w, top + h)
         fill.color = cPreview
         canvas.drawRoundRect(box, dp(12f), dp(12f), fill)

@@ -28,6 +28,8 @@ object Ico {
     const val NUMPAD = 17
     const val KEYMAP = 18
     const val MIC = 19
+    const val STAR = 20
+    const val COPY = 21
 
     fun forGroup(name: String): Int = when (name) {
         "Smileys & Emotion" -> SMILE
@@ -39,6 +41,7 @@ object Ico {
         "Objects" -> BULB
         "Symbols" -> HEART
         "Flags" -> FLAG
+        "Kaomoji & Symbols" -> STAR
         else -> SMILE
     }
 }
@@ -243,6 +246,22 @@ class IconView(ctx: Context, var kind: Int) : View(ctx) {
                 c.drawArc(RectF(-8f, -5f, 8f, 5f), 0f, 180f, false, stroke)
                 c.drawLine(0f, 5f, 0f, 9f, stroke)
                 c.drawLine(-5f, 9f, 5f, 9f, stroke)
+            }
+            Ico.STAR -> {
+                val p = Path()
+                for (i in 0 until 10) {
+                    val r = if (i % 2 == 0) 9.5f else 4.2f
+                    val a = Math.toRadians((i * 36 - 90).toDouble())
+                    val x = (Math.cos(a) * r).toFloat()
+                    val y = (Math.sin(a) * r).toFloat()
+                    if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+                }
+                p.close()
+                c.drawPath(p, stroke)
+            }
+            Ico.COPY -> {
+                c.drawRoundRect(RectF(-3f, -8f, 8f, 4f), 2f, 2f, stroke)
+                c.drawRoundRect(RectF(-8f, -4f, 3f, 8f), 2f, 2f, stroke)
             }
             Ico.DELETE -> {
                 val p = Path().apply {

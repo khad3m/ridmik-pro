@@ -11,6 +11,8 @@ object Prefs {
         "banglaDigits" to true,
         "clipboard" to true,
         "voice" to true,
+        "voice_punct" to true,
+        "voice_haptic" to true,
         "lang_en" to true,
         "lang_avro" to true,
         "lang_probhat" to false,
@@ -79,5 +81,15 @@ object Prefs {
 
     fun setString(c: Context, key: String, value: String) {
         sp(c).edit().putString(key, value).apply()
+    }
+
+    /** Voice typing language mode: "auto" (Bangla + English), "bn" (Bangla), "en" (English). */
+    fun voiceLang(c: Context): String = getString(c, "voice_lang", "auto").ifEmpty { "auto" }
+
+    /** Voice silence auto-stop timeout in ms: "fast" (1200), "normal" (1800), "relaxed" (2800). */
+    fun voiceSilenceMs(c: Context): Int = when (getString(c, "voice_silence", "normal")) {
+        "fast" -> 1200
+        "relaxed" -> 2800
+        else -> 1800
     }
 }
