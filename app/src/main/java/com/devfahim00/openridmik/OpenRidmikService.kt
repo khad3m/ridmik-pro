@@ -92,8 +92,8 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
     private var forceLatin = false
     private var passwordField = false
     private var mode = Mode.ALPHA
-    /** 0 = swap rows instantly, ±1 = animated layout transition (alphabet ↔ symbols). */
-    private var rowAnimDir = 0
+    /** true = the next rebuild swaps rows with a quick cross-fade (alphabet ↔ symbols pages). */
+    private var rowAnimPending = false
     private var shift = 0
     private var lastShiftTap = 0L
     private var enterLabel: String? = null
@@ -386,9 +386,9 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             jatiyo -> "জাতীয়"
             else -> "Avro"
         }
-        if (rowAnimDir != 0) {
-            kbView.transitionRows(rows, rowAnimDir)
-            rowAnimDir = 0
+        if (rowAnimPending) {
+            kbView.transitionRows(rows)
+            rowAnimPending = false
         } else {
             kbView.rows = rows
         }
@@ -480,17 +480,17 @@ class OpenRidmikService : InputMethodService(), KeyboardView.Listener {
             Codes.SYMBOLS, Codes.SYM1 -> {
                 finishComposing(ic)
                 mode = Mode.SYM1
-                rowAnimDir = -1 // symbols slide in from the right
+                rowAnimPending = true
                 rebuild()
             }
             Codes.SYM2 -> {
                 mode = Mode.SYM2
-                rowAnimDir = -1
+                rowAnimPending = true
                 rebuild()
             }
             Codes.ALPHA -> {
                 mode = Mode.ALPHA
-                rowAnimDir = 1 // back to the alphabet
+                rowAnimPending = true
                 rebuild()
             }
             Codes.EMOJI -> showEmoji()

@@ -41,10 +41,10 @@ Everything else (Avro/Probhat/Jatiyo layouts, suggestions, emoji, clipboard, the
 Push a tag to build a named signed release:
 
 ```bash
-git tag v1.2.0 && git push origin v1.2.0
+git tag v1.2.1 && git push origin v1.2.1
 ```
 
-The Release workflow outputs `RidmikPro-v1.2.0.apk` as a GitHub release. All signed builds share one key, so they update in place.
+The Release workflow outputs `RidmikPro-v1.2.1.apk` as a GitHub release. All signed builds share one key, so they update in place.
 
 ## 🏗️ Build from source
 

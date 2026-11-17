@@ -534,16 +534,31 @@ class SettingsActivity : Activity() {
             }
             Prefs.setString(this@SettingsActivity, "gemini_key", key)
             Prefs.setString(this@SettingsActivity, "gemini_model", model)
-            voiceStatus.text = "Testing $model…"
+            voiceStatus.text = "Testing the key…"
             voiceStatus.setTextColor(muted)
             Thread {
+                // step 1: the key alone - GET /models cannot fail for model reasons
+                val cat = GeminiVoice.fetchModels(key)
+                if (cat is GeminiVoice.ModelList.Fail) {
+                    runOnUiThread {
+                        voiceStatus.text = cat.message
+                        voiceStatus.setTextColor(errColor)
+                    }
+                    return@Thread
+                }
+                val models = (cat as GeminiVoice.ModelList.Ok).models
+                if (models.isNotEmpty()) {
+                    // refresh the fallback catalogue while we are here
+                    Prefs.setString(this@SettingsActivity, "models_cache", models.joinToString("\n"))
+                }
+                // step 2: the chosen model, with a minimal request
                 val err = GeminiVoice.ping(key, model)
                 runOnUiThread {
                     if (err == null) {
                         voiceStatus.text = "Saved ✓  ·  $model is working"
                         voiceStatus.setTextColor(accent)
                     } else {
-                        voiceStatus.text = err
+                        voiceStatus.text = "Key is OK ✓ - but $model failed: $err"
                         voiceStatus.setTextColor(errColor)
                     }
                 }

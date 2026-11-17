@@ -19,7 +19,7 @@ sealed class VoiceResult {
     /** Recognised text; empty when the audio contained no speech. */
     class Text(val text: String) : VoiceResult()
     /** Human-readable problem, shown to the user as a toast. [modelProblem] lets the caller retry with another model. */
-    class Error(val message: String, val modelProblem: Boolean = false) : VoiceResult()
+    class Error(val message: String, val modelProblem: Boolean = false, val retryBare: Boolean = false) : VoiceResult()
 }
 
 object GeminiVoice {
@@ -63,11 +63,18 @@ object GeminiVoice {
 
     /** GET /models: only models that accept generateContent, newest catalogue straight from Google. */
     fun fetchModels(apiKey: String): ModelList {
-        val conn = URL(BASE + "models?pageSize=1000").openConnection() as HttpURLConnection
+        val first = fetchModelsOnce(apiKey, "models?pageSize=1000")
+        if (first is ModelList.Ok) return first
+        // some API versions reject pageSize - retry with the plain endpoint
+        return fetchModelsOnce(apiKey, "models")
+    }
+
+    private fun fetchModelsOnce(apiKey: String, path: String): ModelList {
+        val conn = URL(BASE + path).openConnection() as HttpURLConnection
         return try {
             conn.connectTimeout = 12000
             conn.readTimeout = 20000
-            conn.setRequestProperty("x-goog-api-key", apiKey)
+            conn.setRequestProperty("x-goog-api-key", cleanKey(apiKey))
             val code = conn.responseCode
             if (code !in 200..299) {
                 val msg = try {
@@ -105,14 +112,14 @@ object GeminiVoice {
         }
     }
 
-    /** Text-only sanity check of a key; returns null when the key works, otherwise the reason. */
+    /** Minimal text-only check: null when the key + model work, otherwise the exact reason. */
     fun ping(apiKey: String, model: String): String? {
+        // no generationConfig at all - every generateContent model accepts a bare contents request
         val body = JSONObject()
             .put(
                 "contents",
                 JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", "Reply with exactly: OK")))),
             )
-            .put("generationConfig", generationConfig(model, 8))
         return when (val r = post(apiKey, model, body)) {
             is VoiceResult.Text -> null
             is VoiceResult.Error -> r.message
@@ -151,7 +158,22 @@ object GeminiVoice {
         return gen
     }
 
+    /** Pastes often carry stray spaces, newlines or smart quotes; the header must be the bare key. */
+    private fun cleanKey(k: String) = k.replace(Regex("[\\s\"“”‘’]+"), "")
+
     private fun post(apiKey: String, model: String, body: JSONObject): VoiceResult {
+        val r = postOnce(apiKey, model, body)
+        if (r is VoiceResult.Error && r.retryBare) {
+            // some models reject extra generation fields (thinkingConfig, temperature, ...):
+            // one bare-bones retry with just the contents keeps voice typing working anyway
+            val bare = JSONObject().put("contents", body.optJSONArray("contents") ?: JSONArray())
+            val r2 = postOnce(apiKey, model, bare)
+            if (r2 is VoiceResult.Text) return r2
+        }
+        return r
+    }
+
+    private fun postOnce(apiKey: String, model: String, body: JSONObject): VoiceResult {
         val conn = URL(BASE + model + ":generateContent").openConnection() as HttpURLConnection
         return try {
             conn.connectTimeout = 12000
@@ -159,7 +181,7 @@ object GeminiVoice {
             conn.requestMethod = "POST"
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("x-goog-api-key", apiKey)
+            conn.setRequestProperty("x-goog-api-key", cleanKey(apiKey))
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
             if (code !in 200..299) {
@@ -191,22 +213,24 @@ object GeminiVoice {
         }
         val m = msg.lowercase()
         return when {
-            code == 404 || m.contains("not found") || m.contains("not supported") || m.contains("does not support") ->
-                VoiceResult.Error("Model unavailable - trying the next one", modelProblem = true)
             m.contains("api key not valid") || m.contains("api_key_invalid") ->
                 VoiceResult.Error("Invalid API key - check it in Ridmik Pro settings")
-            code == 401 || code == 403 || m.contains("permission denied") ->
-                VoiceResult.Error("Key rejected (403) - check the key restrictions in Google AI Studio")
+            // region blocks arrive as 400 with this text - must be checked before any "not supported" model logic
             m.contains("location is not supported") || m.contains("not supported for the api use") ->
                 VoiceResult.Error(
                     "Google blocks the Gemini API from your region/network. The key is fine - try another network (or VPN), then retry.",
                 )
             code == 429 || m.contains("quota") || m.contains("resource_exhausted") ->
                 VoiceResult.Error("Free quota reached - wait a minute (rate limit) or a day (daily limit)")
+            code == 401 || code == 403 || m.contains("permission denied") ->
+                VoiceResult.Error("Key rejected (403) - check the key restrictions in Google AI Studio")
+            // show Google's actual message so the cause is never hidden; the caller retries bare once
+            code == 400 ->
+                VoiceResult.Error("Bad request (400): ${msg.take(160)}", retryBare = true)
+            code == 404 || m.contains("not found") || m.contains("not supported") || m.contains("does not support") ->
+                VoiceResult.Error("Model unavailable - trying the next one", modelProblem = true)
             code >= 500 ->
                 VoiceResult.Error("Gemini server busy - try again")
-            code == 400 ->
-                VoiceResult.Error(if (msg.length > 120) "Bad request (400)" else "Bad request (400): $msg")
             else ->
                 VoiceResult.Error("Failed (HTTP $code): ${msg.take(100)}")
         }

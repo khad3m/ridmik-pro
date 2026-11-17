@@ -99,10 +99,10 @@ class KeyboardView(context: Context) : View(context) {
     private var rects: List<List<RectF>> = emptyList()
     private var rowH = 0f
 
-    // layout-switch cross-fade: a snapshot of the old layout slides a few pixels and fades out over the new one
+    // layout-switch cross-fade: the old keys fade out over the new ones with no movement -
+    // the keyboard shell stays put, so switching pages feels like the keys simply changed
     private var fadeBmp: Bitmap? = null
     private var fadeAlpha = 1f
-    private var fadeShift = 0f
     private val fadePaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private var fadeAnim: ValueAnimator? = null
 
@@ -240,13 +240,13 @@ class KeyboardView(context: Context) : View(context) {
         val bmp = fadeBmp
         if (bmp != null) {
             fadePaint.alpha = (fadeAlpha * 255).toInt()
-            canvas.drawBitmap(bmp, fadeShift, 0f, fadePaint)
+            canvas.drawBitmap(bmp, 0f, 0f, fadePaint)
         }
     }
 
-    /** Swaps [rows] with a soft cross-fade ([dir] +1 = old layout slides right, -1 = left) so
-     *  moving between the alphabet and the ?123 pages does not feel like a hard cut. */
-    fun transitionRows(newRows: List<List<Key>>, dir: Int) {
+    /** Swaps [rows] with a very quick in-place cross-fade: no sliding, no movement - it reads
+     *  as the same keyboard whose keys simply changed, not as a panel transition. */
+    fun transitionRows(newRows: List<List<Key>>) {
         fadeAnim?.cancel()
         if (width > 0 && height > 0 && rows.isNotEmpty() && rects.size == rows.size) {
             val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -259,14 +259,11 @@ class KeyboardView(context: Context) : View(context) {
         }
         rows = newRows
         fadeAlpha = 1f
-        fadeShift = 0f
         fadeAnim = ValueAnimator.ofFloat(1f, 0f).apply {
-            duration = 180
+            duration = 120
             interpolator = DecelerateInterpolator()
             addUpdateListener { a ->
-                val v = a.animatedValue as Float
-                fadeAlpha = v
-                fadeShift = dir * (1f - v) * width * 0.06f
+                fadeAlpha = a.animatedValue as Float
                 invalidate()
             }
             addListener(object : AnimatorListenerAdapter() {
