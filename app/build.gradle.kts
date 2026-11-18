@@ -13,7 +13,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
-        versionName = (project.findProperty("appVersion") as String?) ?: "1.2.5"
+        versionName = (project.findProperty("appVersion") as String?) ?: "1.2.6"
     }
 
     // Release signing comes from the environment (set by the release workflow from repo secrets).

@@ -3,6 +3,16 @@
 All notable changes to **Ridmik Pro** — an OpenRidmik fork with Gemini voice typing.
 Versioned releases: <https://github.com/khad3m/ridmik-pro/releases>
 
+## [v1.2.6] – 2026-11-18
+
+### Changed
+
+- **Ctrl shortcut row moved to the top of the symbol pages**: it used to sit as the 4th key row (2nd from the bottom); it now sits directly under the toolbar — 2nd row from the top, 5th from the bottom — above the digit row, with the symbol rows and the space row unchanged underneath. Every layout still shows the same 6 rows, so nothing else moved.
+
+### New
+
+- **In-app update**: Settings now has an "App update" section. "Check for update" fetches the latest GitHub release, compares it with the installed version and — if a newer build exists — downloads the APK with a live progress label and hands it to the system installer (PackageInstaller session). If the "Install unknown apps" permission is missing, the right Android settings screen opens first. Shows the current version under the section and an "Up to date ✓" label when nothing newer exists; requires the new `REQUEST_INSTALL_PACKAGES` permission.
+
 ## [v1.2.5] – 2026-11-17
 
 ### Fixed

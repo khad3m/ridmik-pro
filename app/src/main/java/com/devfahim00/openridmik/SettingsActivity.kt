@@ -4,8 +4,10 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
 import android.app.ApplicationExitInfo
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -29,6 +31,9 @@ import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -509,6 +514,70 @@ class SettingsActivity : Activity() {
             startActivityForResult(i, 902)
         }
 
+        // ---- app update ----
+        section("App update")
+        val curVersion = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (_: Exception) { "?" }
+        val ucard = card()
+        var updateBusy = false
+        var updateLabel: TextView? = null
+        val checkRow = row(ucard, true, "Check for update", chevron()) {
+            val label = updateLabel ?: return@row
+            if (updateBusy) return@row
+            updateBusy = true
+            label.text = "Checking for update…"
+            Thread {
+                try {
+                    val latest = fetchLatestRelease()
+                    if (latest == null) {
+                        Toast.makeText(this, "Could not reach GitHub — check your internet", Toast.LENGTH_SHORT).show()
+                        runOnUiThread { label.text = "Check for update" }
+                        return@Thread
+                    }
+                    val (tag, apkUrl) = latest
+                    if (!isNewerVersion(tag, curVersion)) {
+                        runOnUiThread {
+                            label.text = "Up to date ($curVersion) ✓"
+                            Toast.makeText(this, "Ridmik Pro $curVersion is the latest version", Toast.LENGTH_SHORT).show()
+                        }
+                        return@Thread
+                    }
+                    if (!packageManager.canRequestPackageInstalls()) {
+                        Toast.makeText(
+                            this,
+                            "Allow \"Install unknown apps\" for Ridmik Pro, then tap Check again",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        try {
+                            startActivity(
+                                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")),
+                            )
+                        } catch (_: Exception) {}
+                        runOnUiThread { label.text = "Install permission needed — tap to retry" }
+                        return@Thread
+                    }
+                    val apk = File(cacheDir, "update.apk")
+                    runOnUiThread { label.text = "Downloading $tag…" }
+                    downloadApk(apkUrl, apk) { pct ->
+                        runOnUiThread { label.text = "Downloading $tag… $pct%" }
+                    }
+                    runOnUiThread { label.text = "Installing $tag…" }
+                    installApk(apk)
+                    runOnUiThread { label.text = "Check for update" }
+                    Toast.makeText(this, "Confirm the $tag install in the system dialog", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    CrashLog.record(this, "inAppUpdate", e)
+                    Toast.makeText(this, "Update failed: ${e.message ?: "error"}", Toast.LENGTH_SHORT).show()
+                    runOnUiThread { label.text = "Check for update" }
+                } finally {
+                    updateBusy = false
+                }
+            }.start()
+        }
+        updateLabel = checkRow
+        row(ucard, false, "Current version: $curVersion")
+
         // ---- keyboard keeps switching? ----
         section("Keyboard keeps switching?")
         val diag = card()
@@ -933,6 +1002,105 @@ class SettingsActivity : Activity() {
                     Toast.makeText(this, "Invalid backup file", Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+    }
+
+    // ---- in-app update (GitHub releases) ----
+
+    /** Tag + APK download URL of the newest GitHub release, or null on any network/parse problem. */
+    private fun fetchLatestRelease(): Pair<String, String>? {
+        val conn = URL("https://api.github.com/repos/khad3m/ridmik-pro/releases/latest").openConnection() as HttpURLConnection
+        conn.connectTimeout = 10000
+        conn.readTimeout = 15000
+        conn.setRequestProperty("Accept", "application/vnd.github+json")
+        conn.setRequestProperty("User-Agent", "RidmikPro-Updater")
+        try {
+            val obj = org.json.JSONObject(conn.inputStream.bufferedReader().readText())
+            val assets = obj.getJSONArray("assets")
+            val apkUrl = (0 until assets.length())
+                .map { assets.getJSONObject(it) }
+                .firstOrNull { it.getString("name").endsWith(".apk") }
+                ?.getString("browser_download_url") ?: return null
+            return obj.getString("tag_name") to apkUrl
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Numeric comparison of dotted versions ("v1.2.6" vs "1.2.5"); missing parts count as 0. */
+    private fun isNewerVersion(remote: String, local: String): Boolean {
+        fun parts(v: String) = v.trim().trimStart('v', 'V')
+            .split(".").map { s -> s.takeWhile { it.isDigit() }.ifEmpty { "0" }.toInt() }
+        val r = parts(remote)
+        val l = parts(local)
+        for (i in 0 until maxOf(r.size, l.size)) {
+            val rv = r.getOrElse(i) { 0 }
+            val lv = l.getOrElse(i) { 0 }
+            if (rv != lv) return rv > lv
+        }
+        return false
+    }
+
+    /** Streams the release APK into [dest], reporting progress in whole percent. */
+    private fun downloadApk(url: String, dest: File, onProgress: (Int) -> Unit) {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 10000
+        conn.readTimeout = 30000
+        conn.instanceFollowRedirects = true
+        conn.setRequestProperty("User-Agent", "RidmikPro-Updater")
+        try {
+            val total = conn.contentLengthLong
+            dest.outputStream().use { out ->
+                conn.inputStream.use { ins ->
+                    val buf = ByteArray(64 * 1024)
+                    var read = 0L
+                    var lastPct = -20
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        read += n
+                        if (total > 0) {
+                            val pct = (read * 100 / total).toInt()
+                            if (pct >= lastPct + 10) {
+                                lastPct = pct
+                                onProgress(pct)
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Hands a downloaded APK to the system installer via a PackageInstaller session. */
+    private fun installApk(apk: File) {
+        val pi = packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        val sessionId = pi.createSession(params)
+        val session = pi.openSession(sessionId)
+        try {
+            session.openWrite("RidmikPro.apk", 0, apk.length()).use { out ->
+                apk.inputStream().use { ins -> ins.copyTo(out, 64 * 1024) }
+                session.fsync(out)
+            }
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            // status broadcast has no receiver on purpose: the system install dialog is the feedback
+            val sender = PendingIntent.getBroadcast(
+                this,
+                sessionId,
+                Intent("com.ridmik.pro.INSTALL_RESULT").setPackage(packageName),
+                flags,
+            )
+            session.commit(sender.intentSender)
+        } catch (e: Exception) {
+            session.abandon()
+            throw e
+        } finally {
+            session.close()
         }
     }
 }

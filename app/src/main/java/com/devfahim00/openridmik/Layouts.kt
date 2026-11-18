@@ -212,6 +212,9 @@ object Layouts {
 
     fun symbols(page: Int, showCtrlRow: Boolean = true): List<List<Key>> {
         val rows = ArrayList<List<Key>>()
+        // Ctrl shortcuts sit as the first key row, right under the toolbar:
+        // 2nd row from the top (toolbar counted), 5th from the bottom.
+        if (showCtrlRow) rows.add(ctrlShortcutRow())
         rows.add("1234567890".map { plain(it) })
         if (page == 1) {
             rows.add("@#\$_&-+()/".map { plain(it) })
@@ -228,7 +231,6 @@ object Layouts {
                     listOf(special("", Codes.DELETE, 1.5f, repeat = true)),
             )
         }
-        if (showCtrlRow) rows.add(ctrlShortcutRow())
         rows.add(bottom(false, false))
         return rows
     }
